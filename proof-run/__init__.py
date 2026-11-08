@@ -71,12 +71,12 @@ def _on_post_tool_call(ctx, tool_name, args, result, **kwargs):
     buf.append({"tool": tool_name, "args": dict(args or {}), "result": result, "session": session_id})
     if len(buf) > _SESSION_BUFFER_MAX:
         del buf[: len(buf) - _SESSION_BUFFER_MAX]
-    # B5: cache the result keyed by tool name (per-session) for enforcement.
-    # Only store results from the current session to avoid cross-contamination.
-    if isinstance(result, dict) and session_id:
+    # F2: cache the result, parsing JSON strings into dicts.
+    parsed = core._parse_result(result)
+    if isinstance(parsed, dict) and session_id:
         cache = _runtime_cache(ctx)
         cache.setdefault(session_id, {})
-        cache[session_id][tool_name] = result
+        cache[session_id][tool_name] = parsed
     return None
 
 
@@ -124,7 +124,7 @@ def _bind_contract(ctx, contract: dict) -> None:
     path.write_text(json.dumps(contract, indent=1, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def _handle(ctx, raw_args: str) -> str:
+def _handle(ctx, raw_args: str, session_id: str = "default") -> str:
     args = (raw_args or "").strip().split()
     if not args:
         return "Usage: /proof start <name> | stop | learn <name> [last N] | status | unbind <name>"
@@ -132,10 +132,15 @@ def _handle(ctx, raw_args: str) -> str:
     if cmd == "start" and len(args) > 1:
         rec = core.Recorder(root=_contracts_root(ctx))
         rec.start(args[1], intent=" ".join(args[2:]) or args[1])
-        _active_recorders(ctx)["default"] = rec
+        # F3: key the recorder by the current session
+        _active_recorders(ctx)[session_id] = rec
         return f"Recording '{args[1]}' — do the task once, then /proof stop."
     if cmd == "stop":
-        rec = _active_recorders(ctx).pop("default", None)
+        # F3: pop from any session's recorder
+        recorders = _active_recorders(ctx)
+        rec = recorders.pop(session_id, None)
+        if rec is None and len(recorders) == 1:
+            rec = recorders.pop(next(iter(recorders)))
         if rec is None:
             return "No active recording."
         try:
@@ -149,10 +154,12 @@ def _handle(ctx, raw_args: str) -> str:
     if cmd == "learn" and len(args) > 1:
         name = args[1]
         last_n = int(args[2]) if len(args) > 2 and args[2].isdigit() else None
+        # F3: only use calls from the current session
         buf = _session_buffer(ctx)
-        if not buf:
-            return "No tool calls in this session yet. Run a task first, then /proof learn <name>."
-        calls = buf[-last_n:] if last_n else buf
+        session_calls = [c for c in buf if c.get("session", "default") == session_id]
+        if not session_calls:
+            return "No tool calls in this session. Run a task first, then /proof learn <name>."
+        calls = session_calls[-last_n:] if last_n else session_calls
         rec = core.Recorder(root=_contracts_root(ctx))
         rec.start(name, intent=f"Learned from session ({len(calls)} calls)")
         for call in calls:
@@ -184,7 +191,7 @@ def _handle(ctx, raw_args: str) -> str:
     if cmd == "rebind" and len(args) > 1:
         rec = core.Recorder(root=_contracts_root(ctx))
         rec.start(args[1], intent=args[1])
-        _active_recorders(ctx)["default"] = rec
+        _active_recorders(ctx)[session_id] = rec
         return f"Rebinding '{args[1]}' — do the corrected task once, then /proof stop."
     return "Usage: /proof start <name> | stop | learn <name> [last N] | status | unbind <name>"
 
@@ -192,9 +199,9 @@ def _handle(ctx, raw_args: str) -> str:
 def register(ctx):
     ctx.register_command(
         name="proof",
-        handler=lambda raw: _handle(ctx, raw),
+        handler=lambda raw, session_id="default": _handle(ctx, raw, session_id),
         description="Record a successful run into a live execution contract",
-        args_hint="start <name> | stop | bind <name> | status | rebind <name>",
+        args_hint="start <name> | stop | learn <name> [last N] | status | unbind <name>",
     )
     ctx.register_hook("pre_tool_call", lambda **kw: _on_pre_tool_call(ctx, **kw))
     ctx.register_hook("post_tool_call", lambda **kw: _on_post_tool_call(ctx, **kw))

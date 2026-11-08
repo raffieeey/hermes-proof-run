@@ -23,10 +23,11 @@ class _RecordedCall:
 
 
 # Tools that are safe to run without gating (reads, searches, listings).
+# Note: "terminal" is NOT here because terminal commands can be mutating.
 READ_ONLY_TOOLS = {
     "read_file", "list_dir", "search_files", "web_search", "web_extract",
     "vision_analyze", "skill_view", "session_search", "memory",
-    "stock_level", "terminal", "git_status", "git_log", "git_diff",
+    "stock_level", "git_status", "git_log", "git_diff",
 }
 
 
@@ -34,15 +35,28 @@ def _is_read_only(tool: str) -> bool:
     return tool in READ_ONLY_TOOLS
 
 
-def _is_error_result(result: Any) -> bool:
-    """True only when the tool call itself failed, not when it reports bad news."""
-    if isinstance(result, dict):
-        # Only an explicit failure marker counts — a result that merely contains
-        # an "error" field can be a successful observation of an error state.
-        return result.get("success") is False or result.get("status") == "tool_error"
+def _parse_result(result: Any) -> Any:
+    """Parse string results that contain JSON into dicts for extraction."""
     if isinstance(result, str):
-        return "traceback" in result.lower() or "exception" in result.lower()
-    return result is None
+        try:
+            parsed = json.loads(result)
+            if isinstance(parsed, dict):
+                return parsed
+        except (json.JSONDecodeError, ValueError):
+            pass
+    return result
+
+
+def _is_error_result(result: Any) -> bool:
+    """True only when the tool call itself failed."""
+    parsed = _parse_result(result)
+    if isinstance(parsed, dict):
+        return (parsed.get("success") is False
+                or parsed.get("status") in ("tool_error", "error")
+                or ("error" in parsed and parsed.get("status") == "error"))
+    if isinstance(parsed, str):
+        return "traceback" in parsed.lower() or "exception" in parsed.lower()
+    return False
 
 
 class Recorder:
@@ -87,11 +101,12 @@ class Recorder:
 
             reads = [c for c in calls if _is_read_only(c.tool)]
 
-            # B3: derive preconditions from ALL read tools, not just 'stock_level'.
+            # B3/F2: derive preconditions from ALL read tools, parsing JSON strings.
             preconditions = []
             for call in reads:
-                if isinstance(call.result, dict):
-                    for key, value in call.result.items():
+                parsed = _parse_result(call.result)
+                if isinstance(parsed, dict):
+                    for key, value in parsed.items():
                         if isinstance(value, (int, float, str, bool)):
                             preconditions.append({
                                 "kind": "tool_fact", "tool": call.tool,
@@ -101,8 +116,9 @@ class Recorder:
 
             success_evidence = []
             for call in mutating:
-                if isinstance(call.result, dict):
-                    for key, value in call.result.items():
+                parsed = _parse_result(call.result)
+                if isinstance(parsed, dict):
+                    for key, value in parsed.items():
                         if isinstance(value, (int, float, str, bool)):
                             success_evidence.append({
                                 "kind": "tool_result_field", "tool": call.tool,
@@ -141,18 +157,25 @@ class Recorder:
 
 
 def _arg_patterns(arg_sets: list[dict[str, Any]]) -> dict[str, Any]:
-    patterns: dict[str, Any] = {}
+    """F5: preserve all observed values — lists for multiple, scalar for single."""
+    all_values: dict[str, list] = {}
     for args in arg_sets:
         for key, value in args.items():
-            if isinstance(value, (int, float)) and not isinstance(value, bool):
-                cur = patterns.get(key)
-                if cur is None:
-                    patterns[key] = {"min": value, "max": value}
-                else:
-                    cur["min"] = min(cur["min"], value)
-                    cur["max"] = max(cur["max"], value)
+            all_values.setdefault(key, []).append(value)
+    patterns: dict[str, Any] = {}
+    for key, values in all_values.items():
+        numeric = [v for v in values if isinstance(v, (int, float)) and not isinstance(v, bool)]
+        non_numeric = [v for v in values if not (isinstance(v, (int, float)) and not isinstance(v, bool))]
+        if numeric and not non_numeric:
+            if len(set(numeric)) == 1:
+                patterns[key] = numeric[0]
             else:
-                patterns[key] = value
+                patterns[key] = {"min": min(numeric), "max": max(numeric)}
+        elif len(set(non_numeric)) == 1:
+            patterns[key] = non_numeric[0]
+        else:
+            # Multiple distinct non-numeric values: allow any of them.
+            patterns[key] = {"any": non_numeric}
     return patterns
 
 
@@ -167,13 +190,16 @@ def check_contract(contract: dict[str, Any], *, runtime: dict[str, Any],
     if tool not in contract["action_window"]["mutating_tools"]:
         return None
 
-    # B4: check that the proposed args match the recorded arg patterns.
+    # B4/F5: check that the proposed args match the recorded arg patterns.
     patterns = contract["action_window"].get("allowed_arg_patterns", {}).get(tool, {})
     for key, pattern in patterns.items():
         actual = args.get(key)
         if actual is None:
             return {"action": "block", "message": f"Contract {contract['contract_id']}: argument {key} is missing"}
-        if isinstance(pattern, dict) and "min" in pattern:
+        if isinstance(pattern, dict) and "any" in pattern:
+            if actual not in pattern["any"]:
+                return {"action": "block", "message": f"Contract {contract['contract_id']}: argument {key}={actual} not in recorded values {pattern['any']}"}
+        elif isinstance(pattern, dict) and "min" in pattern:
             if not isinstance(actual, (int, float)) or actual < pattern["min"] or actual > pattern["max"]:
                 return {"action": "block", "message": f"Contract {contract['contract_id']}: argument {key}={actual} outside recorded range {pattern['min']}-{pattern['max']}"}
         elif actual != pattern:
@@ -196,7 +222,10 @@ def check_contract(contract: dict[str, Any], *, runtime: dict[str, Any],
 
 def _compare(current: Any, op: str, expected: Any) -> bool:
     if op == ">=":
-        return current >= expected
+        # F6: only use >= for comparable types (numbers), not strings.
+        if isinstance(current, (int, float)) and isinstance(expected, (int, float)):
+            return current >= expected
+        return current == expected
     if op == "==":
         return current == expected
     return False
