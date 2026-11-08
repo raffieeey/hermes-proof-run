@@ -14,12 +14,12 @@ from typing import Any, Optional
 
 
 # Security: contract names must be safe filesystem identifiers.
-_CONTRACT_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
+_CONTRACT_NAME_RE = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}")
 
 
 def _validate_contract_name(name: str) -> str:
     """Reject contract names that could traverse paths or inject shell characters."""
-    if not _CONTRACT_NAME_RE.match(name):
+    if not isinstance(name, str) or not _CONTRACT_NAME_RE.fullmatch(name):
         raise ContractError(f"invalid contract name '{name}': use letters, digits, hyphens, underscores (max 64 chars)")
     return name
 
@@ -31,20 +31,37 @@ _SECRET_PATTERNS = [
     re.compile(r"\bAKIA[A-Z0-9]{16}\b"),
     re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.eyJ"),  # JWT prefix
     re.compile(r"\b(?:api[_-]?key|token|password|secret)\s*[:=]\s*\S{8,}", re.IGNORECASE),
+    re.compile(r"Bearer\s+[A-Za-z0-9_-]{20,}", re.IGNORECASE),
+    re.compile(r"\bxox[bp]-[A-Za-z0-9-]{10,}"),  # Slack
+    re.compile(r"\bAIza[A-Za-z0-9_-]{30,}"),  # Google
+    re.compile(r"\bglpat-[A-Za-z0-9_-]{20,}"),  # GitLab
+    re.compile(r"-----BEGIN\s+[A-Z\s]*PRIVATE KEY-----"),
 ]
 
 
 def _redact_secrets(value: Any) -> Any:
-    """Recursively redact secret-looking strings from a value before persisting."""
+    """Recursively redact secret-looking strings from keys and values."""
     if isinstance(value, str):
         for pattern in _SECRET_PATTERNS:
             value = pattern.sub("[REDACTED]", value)
         return value
+    if isinstance(value, bytes):
+        return _redact_secrets(value.decode("utf-8", errors="replace")).encode("utf-8")
     if isinstance(value, dict):
-        return {k: _redact_secrets(v) for k, v in value.items()}
-    if isinstance(value, list):
-        return [_redact_secrets(v) for v in value]
+        return {_redact_secrets(k): _redact_secrets(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        redacted = [_redact_secrets(v) for v in value]
+        return tuple(redacted) if isinstance(value, tuple) else redacted
     return value
+
+
+def _safe_path(base: Path, name: str) -> Path:
+    """Resolve a path and verify it stays within the base directory."""
+    _validate_contract_name(name)
+    resolved = (base / f"{name}.json").resolve()
+    if not resolved.is_relative_to(base.resolve()):
+        raise ContractError(f"path escapes contracts directory: {name}")
+    return resolved
 
 
 class ContractError(Exception):
@@ -183,7 +200,7 @@ class Recorder:
 
     def _persist(self, contract: dict[str, Any]) -> None:
         _validate_contract_name(contract["contract_id"])
-        target = self.root / "contracts" / f"{contract['contract_id']}.json"
+        target = _safe_path(self.root / "contracts", contract["contract_id"])
         target.parent.mkdir(parents=True, exist_ok=True)
         if target.exists():
             prior = json.loads(target.read_text(encoding="utf-8"))
