@@ -131,8 +131,11 @@ def _handle(ctx, raw_args: str, session_id: str = "default") -> str:
         return "Usage: /proof start <name> | stop | learn <name> [last N] | status | unbind <name>"
     cmd = args[0]
     if cmd == "start" and len(args) > 1:
-        rec = core.Recorder(root=_contracts_root(ctx))
-        rec.start(args[1], intent=" ".join(args[2:]) or args[1])
+        try:
+            rec = core.Recorder(root=_contracts_root(ctx))
+            rec.start(args[1], intent=" ".join(args[2:]) or args[1])
+        except core.ContractError as exc:
+            return str(exc)
         # F3: key the recorder by the current session
         _active_recorders(ctx)[session_id] = rec
         return f"Recording '{args[1]}' — do the task once, then /proof stop."
@@ -155,14 +158,16 @@ def _handle(ctx, raw_args: str, session_id: str = "default") -> str:
     if cmd == "learn" and len(args) > 1:
         name = args[1]
         last_n = int(args[2]) if len(args) > 2 and args[2].isdigit() else None
-        # F3: only use calls from the current session
         buf = _session_buffer(ctx)
         session_calls = [c for c in buf if c.get("session", "default") == session_id]
         if not session_calls:
             return "No tool calls in this session. Run a task first, then /proof learn <name>."
         calls = session_calls[-last_n:] if last_n else session_calls
         rec = core.Recorder(root=_contracts_root(ctx))
-        rec.start(name, intent=f"Learned from session ({len(calls)} calls)")
+        try:
+            rec.start(name, intent=f"Learned from session ({len(calls)} calls)")
+        except core.ContractError as exc:
+            return str(exc)
         for call in calls:
             rec.note_tool(call["tool"], call["args"], call["result"])
         try:
