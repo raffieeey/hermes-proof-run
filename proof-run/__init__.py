@@ -83,8 +83,10 @@ def _on_post_tool_call(ctx, tool_name, args, result, **kwargs):
 def _on_pre_tool_call(ctx, tool_name, args, **kwargs):
     session_id = kwargs.get("session_id") or "default"
     rec = _find_recorder(ctx, session_id)
+    # Note: pre_tool_call has no result yet. The actual recording happens
+    # in post_tool_call with the real result. Don't note here to avoid
+    # polluting the recorder with None results that trigger error detection.
     if rec is not None:
-        rec.note_tool(tool_name, args, None)
         return None
     # Enforcement: if any bound contract covers this mutating tool, evaluate it.
     contracts_dir = _contracts_root(ctx) / "contracts"

@@ -35,11 +35,13 @@ def _is_read_only(tool: str) -> bool:
 
 
 def _is_error_result(result: Any) -> bool:
-    """True when the result indicates a failed tool call."""
+    """True only when the tool call itself failed, not when it reports bad news."""
     if isinstance(result, dict):
-        return "error" in result or result.get("status") == "error" or result.get("success") is False
+        # Only an explicit failure marker counts — a result that merely contains
+        # an "error" field can be a successful observation of an error state.
+        return result.get("success") is False or result.get("status") == "tool_error"
     if isinstance(result, str):
-        return "error" in result.lower() or "failed" in result.lower()
+        return "traceback" in result.lower() or "exception" in result.lower()
     return result is None
 
 
