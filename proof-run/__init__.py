@@ -44,11 +44,26 @@ def _runtime_cache(ctx) -> dict:
     return ctx._proof_run_runtime
 
 
+def _session_buffer(ctx) -> list:
+    """Rolling buffer of this session's tool calls for retroactive learning."""
+    if not hasattr(ctx, "_proof_run_session_buffer"):
+        ctx._proof_run_session_buffer = []
+    return ctx._proof_run_session_buffer
+
+
+_SESSION_BUFFER_MAX = 100
+
+
 def _on_post_tool_call(ctx, tool_name, args, result, **kwargs):
     session_id = kwargs.get("session_id") or "default"
     rec = _find_recorder(ctx, session_id)
     if rec is not None:
         rec.note_tool(tool_name, args, result)
+    # Always buffer calls so /proof learn can draft retroactively.
+    buf = _session_buffer(ctx)
+    buf.append({"tool": tool_name, "args": dict(args or {}), "result": result})
+    if len(buf) > _SESSION_BUFFER_MAX:
+        del buf[: len(buf) - _SESSION_BUFFER_MAX]
     # Cache the result for enforcement: if any bound contract uses this
     # tool as a precondition source, store its latest output.
     if isinstance(result, dict):
@@ -118,6 +133,25 @@ def _handle(ctx, raw_args: str) -> str:
         path = _contracts_root(ctx) / "contracts" / f"{args[1]}.json"
         path.write_text(json.dumps(contract, indent=1, sort_keys=True) + "\n", encoding="utf-8")
         return f"Contract {args[1]} bound."
+    if cmd == "learn" and len(args) > 1:
+        name = args[1]
+        last_n = int(args[2]) if len(args) > 2 and args[2].isdigit() else None
+        buf = _session_buffer(ctx)
+        if not buf:
+            return "No tool calls in this session yet. Run a task first, then /proof learn <name>."
+        calls = buf[-last_n:] if last_n else buf
+        # Replay the buffered calls through the recorder to draft a contract.
+        rec = core.Recorder(root=_contracts_root(ctx))
+        rec.start(name, intent=f"Learned from session ({len(calls)} calls)")
+        for call in calls:
+            rec.note_tool(call["tool"], call["args"], call["result"])
+        try:
+            contract = rec.stop(success=True)
+        except core.ContractError as exc:
+            return f"Contract not created: {exc}"
+        return (f"Contract '{name}' learned from {len(calls)} tool calls.\n"
+                f"Mutating tools: {', '.join(contract['action_window']['mutating_tools'])}\n"
+                f"Review and /proof bind {name}.")
     if cmd == "status":
         root = _contracts_root(ctx) / "contracts"
         if not root.exists():
@@ -132,7 +166,7 @@ def _handle(ctx, raw_args: str) -> str:
         rec.start(args[1], intent=args[1])
         _active_recorders(ctx)["default"] = rec
         return f"Rebinding '{args[1]}' — do the corrected task once, then /proof stop."
-    return "Usage: /proof start <name> | stop | bind <name> | status | rebind <name>"
+    return "Usage: /proof start <name> | stop | learn <name> [last N] | bind <name> | status | rebind <name>"
 
 
 def register(ctx):
