@@ -34,7 +34,7 @@ The script refuses socket connections and uses temporary profile homes. No paid 
 
 ## Schema-2 migration
 
-Old prototype contracts inferred numeric ranges and combined fields independently. They are not trusted for reuse by version 0.2.0. Re-demonstrate a task with `/proof rebind <name>`, then `/proof stop`, rather than editing an old `schema_version` field to bypass migration.
+Old prototype contracts inferred numeric ranges and combined fields independently. They are not trusted for reuse by the hardened schema-2 gate. Re-demonstrate a task with `/proof rebind <name>`, then `/proof stop`, rather than editing an old `schema_version` field to bypass migration.
 
 Rebinding grants a temporary recording exemption only for that named contract in the recording session. The saved old version remains in place for other sessions until a valid replacement is published. Cancellation or a failed demonstration leaves it unchanged. The normal safety gate still applies to other bound contracts.
 

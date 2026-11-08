@@ -1,5 +1,5 @@
 name: proof-run
-version: "0.2.0"
+version: "0.1"
 description: "Capture demonstrated actions, check exact arguments and session-bound observations before reuse, and stop on unproven replay evidence. Local operator-controlled contracts and rebind; no model or network calls."
 entry: __init__.py
 author: Deint (Hermes contest entry, design-assisted)
