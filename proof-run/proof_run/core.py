@@ -5,10 +5,46 @@ Pure logic only; host adapters live in the plugin entry point.
 from __future__ import annotations
 
 import json
+import os
+import re
 import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
+
+
+# Security: contract names must be safe filesystem identifiers.
+_CONTRACT_NAME_RE = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$")
+
+
+def _validate_contract_name(name: str) -> str:
+    """Reject contract names that could traverse paths or inject shell characters."""
+    if not _CONTRACT_NAME_RE.match(name):
+        raise ContractError(f"invalid contract name '{name}': use letters, digits, hyphens, underscores (max 64 chars)")
+    return name
+
+
+# Security: patterns that look like secrets, redacted before persisting.
+_SECRET_PATTERNS = [
+    re.compile(r"\bsk-[A-Za-z0-9_-]{20,}"),
+    re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}"),
+    re.compile(r"\bAKIA[A-Z0-9]{16}\b"),
+    re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.eyJ"),  # JWT prefix
+    re.compile(r"\b(?:api[_-]?key|token|password|secret)\s*[:=]\s*\S{8,}", re.IGNORECASE),
+]
+
+
+def _redact_secrets(value: Any) -> Any:
+    """Recursively redact secret-looking strings from a value before persisting."""
+    if isinstance(value, str):
+        for pattern in _SECRET_PATTERNS:
+            value = pattern.sub("[REDACTED]", value)
+        return value
+    if isinstance(value, dict):
+        return {k: _redact_secrets(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_redact_secrets(v) for v in value]
+    return value
 
 
 class ContractError(Exception):
@@ -68,6 +104,7 @@ class Recorder:
         self._active: Optional[dict[str, Any]] = None
 
     def start(self, contract_id: str, intent: str) -> None:
+        _validate_contract_name(contract_id)
         with self._lock:
             self._active = {"contract_id": contract_id, "intent": intent, "calls": []}
 
@@ -145,15 +182,21 @@ class Recorder:
         return contract
 
     def _persist(self, contract: dict[str, Any]) -> None:
+        _validate_contract_name(contract["contract_id"])
         target = self.root / "contracts" / f"{contract['contract_id']}.json"
         target.parent.mkdir(parents=True, exist_ok=True)
         if target.exists():
             prior = json.loads(target.read_text(encoding="utf-8"))
             contract["version"] = int(prior.get("version", 0)) + 1
             contract["supersedes"] = prior.get("version")
+        # Security: redact secrets before writing to disk.
+        contract = _redact_secrets(contract)
         tmp = target.with_suffix(".json.tmp")
         tmp.write_text(json.dumps(contract, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+        # Security: restrict file permissions to owner only.
+        os.chmod(tmp, 0o600)
         tmp.replace(target)
+        os.chmod(target, 0o600)
 
 
 def _arg_patterns(arg_sets: list[dict[str, Any]]) -> dict[str, Any]:

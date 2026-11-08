@@ -111,6 +111,7 @@ def _on_pre_tool_call(ctx, tool_name, args, **kwargs):
 
 
 def _load_contract(ctx, name: str) -> dict | None:
+    core._validate_contract_name(name)
     path = _contracts_root(ctx) / "contracts" / f"{name}.json"
     if not path.exists():
         return None
