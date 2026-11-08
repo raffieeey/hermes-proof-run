@@ -104,10 +104,17 @@ def _load_contract(ctx, name: str) -> dict | None:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
+def _bind_contract(ctx, contract: dict) -> None:
+    """Save the contract as bound."""
+    contract["bound"] = True
+    path = _contracts_root(ctx) / "contracts" / f"{contract['contract_id']}.json"
+    path.write_text(json.dumps(contract, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+
+
 def _handle(ctx, raw_args: str) -> str:
     args = (raw_args or "").strip().split()
     if not args:
-        return "Usage: /proof start <name> | stop | bind <name> | status | rebind <name>"
+        return "Usage: /proof start <name> | stop | learn <name> [last N] | status | unbind <name>"
     cmd = args[0]
     if cmd == "start" and len(args) > 1:
         rec = core.Recorder(root=_contracts_root(ctx))
@@ -122,17 +129,10 @@ def _handle(ctx, raw_args: str) -> str:
             contract = rec.stop(success=True)
         except core.ContractError as exc:
             return f"Contract not created: {exc}"
-        return (f"Contract drafted for '{contract['contract_id']}'.\n"
-                f"Mutating tools: {', '.join(contract['action_window']['mutating_tools'])}\n"
-                f"Review the JSON at {_contracts_root(ctx)}/contracts/{contract['contract_id']}.json, then /proof bind {contract['contract_id']}.")
-    if cmd == "bind" and len(args) > 1:
-        contract = _load_contract(ctx, args[1])
-        if not contract:
-            return f"No contract named {args[1]}."
-        contract["bound"] = True
-        path = _contracts_root(ctx) / "contracts" / f"{args[1]}.json"
-        path.write_text(json.dumps(contract, indent=1, sort_keys=True) + "\n", encoding="utf-8")
-        return f"Contract {args[1]} bound."
+        _bind_contract(ctx, contract)
+        return (f"Contract '{contract['contract_id']}' is live (v{contract['version']}).\n"
+                f"Gating: {', '.join(contract['action_window']['mutating_tools'])}\n"
+                f"Contract JSON: {_contracts_root(ctx)}/contracts/{contract['contract_id']}.json")
     if cmd == "learn" and len(args) > 1:
         name = args[1]
         last_n = int(args[2]) if len(args) > 2 and args[2].isdigit() else None
@@ -140,7 +140,6 @@ def _handle(ctx, raw_args: str) -> str:
         if not buf:
             return "No tool calls in this session yet. Run a task first, then /proof learn <name>."
         calls = buf[-last_n:] if last_n else buf
-        # Replay the buffered calls through the recorder to draft a contract.
         rec = core.Recorder(root=_contracts_root(ctx))
         rec.start(name, intent=f"Learned from session ({len(calls)} calls)")
         for call in calls:
@@ -149,9 +148,17 @@ def _handle(ctx, raw_args: str) -> str:
             contract = rec.stop(success=True)
         except core.ContractError as exc:
             return f"Contract not created: {exc}"
-        return (f"Contract '{name}' learned from {len(calls)} tool calls.\n"
-                f"Mutating tools: {', '.join(contract['action_window']['mutating_tools'])}\n"
-                f"Review and /proof bind {name}.")
+        _bind_contract(ctx, contract)
+        return (f"Contract '{name}' is live (v{contract['version']}), learned from {len(calls)} calls.\n"
+                f"Gating: {', '.join(contract['action_window']['mutating_tools'])}")
+    if cmd == "unbind" and len(args) > 1:
+        contract = _load_contract(ctx, args[1])
+        if not contract:
+            return f"No contract named {args[1]}."
+        contract["bound"] = False
+        path = _contracts_root(ctx) / "contracts" / f"{args[1]}.json"
+        path.write_text(json.dumps(contract, indent=1, sort_keys=True) + "\n", encoding="utf-8")
+        return f"Contract {args[1]} unbound (no longer gating)."
     if cmd == "status":
         root = _contracts_root(ctx) / "contracts"
         if not root.exists():
@@ -166,7 +173,7 @@ def _handle(ctx, raw_args: str) -> str:
         rec.start(args[1], intent=args[1])
         _active_recorders(ctx)["default"] = rec
         return f"Rebinding '{args[1]}' — do the corrected task once, then /proof stop."
-    return "Usage: /proof start <name> | stop | learn <name> [last N] | bind <name> | status | rebind <name>"
+    return "Usage: /proof start <name> | stop | learn <name> [last N] | status | unbind <name>"
 
 
 def register(ctx):
