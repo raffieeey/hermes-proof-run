@@ -26,6 +26,7 @@ class _RecordedCall:
 READ_ONLY_TOOLS = {
     "read_file", "list_dir", "search_files", "web_search", "web_extract",
     "vision_analyze", "skill_view", "session_search", "memory",
+    "stock_level", "terminal", "git_status", "git_log", "git_diff",
 }
 
 
