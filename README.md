@@ -1,32 +1,53 @@
 # Proof Run
 
-Turn a successful Hermes run into a **live execution contract**. Record the tool-call sequence and success evidence once, then gate later mutating calls on the recorded preconditions so a changed world **blocks** instead of silently improvising. Operator-reviewed contracts, rebind on intentional drift. No network, no credentials, no inference calls.
+Turn a successful Hermes run into a **live execution contract**. Record the tool-call sequence and success evidence once, then gate later mutating calls on the recorded preconditions so a changed world **blocks** instead of silently improvising. No network, no credentials, no inference calls.
 
 Hermes Agent Plugin Hackathon entry.
 
-## What it does
+## The pitch
 
-1. `/proof start <name>` — begin capture for this session's tools.
-2. Do the task once. `/proof stop` drafts a reviewable contract: intent, mutating tools, allowed arg patterns, preconditions (from observed read facts), success evidence (from mutating results).
-3. `/proof bind <name>` — activate the contract (operator gesture, required).
-4. Later runs: any mutating tool in the contract's action window is checked against current preconditions. **Pass → allow; drift → block with the exact fact and current value; unknown → block as unsafe.** Unrelated tools are untouched.
-5. `/proof rebind <name>` — after an intentional change, record a fresh success and atomically supersede the old version.
+Hermes Agent is good, but a cheap model can't do what the frontier model does. Proof Run fixes that — record a proven run with the frontier model once, and the cheap model can repeat it safely forever.
 
-## Demo (≤90s)
+## How to use
 
-Synthetic stock-transfer task: contract saves with `stock_level.available >= 3`. Lower the threshold. Next `stock_move` call is blocked **before execution** with `Contract move-stock: precondition stock_level.available >= 3, current 1`. Re-demonstrate, rebind, run proceeds.
+### Way 1: Pre-plan it
+
+1. `/proof start <name>` — tell it you're about to record
+2. Let the agent (frontier model) do the task
+3. `/proof stop` — contract is created AND live immediately. Done.
+
+### Way 2: Retroactive (you didn't plan ahead)
+
+1. The frontier model already did something great in this session
+2. `/proof learn <name>` — captures the last tool calls and creates a live contract immediately
+3. Or `/proof learn <name> 15` to scope it to the last 15 calls
+
+### After the contract is live
+
+Switch to your cheap model. When it runs the same task, every mutating tool call gets checked against the contract's preconditions:
+
+- **Pass → allow** — preconditions match, the call goes through
+- **Drift → block** — with the exact fact and current value: `Contract my-task: precondition stock_level.available >= 3, current 1`
+- **Unknown → block** — never treated as safe
+
+If the world intentionally changed: `/proof rebind <name>` — record a fresh version.
+
+### Other commands
+
+- `/proof status` — see all contracts
+- `/proof unbind <name>` — stop gating (contract is kept, just inactive)
 
 ## What it does not do
 
 - No network, no credentials, no inference calls, no auto-approval.
 - Only tools in the contract's action window are gated; reads and unrelated tools are untouched.
 - Unknown preconditions block, never pass.
-- The contract is the product: human-readable JSON, versioned, profile-scoped under `plugin_data_dir("proof-run")`.
+- The contract is the product: human-readable JSON, versioned, profile-scoped.
 
 ## Tests
 
 ```
-cd plugins/proof-run && PYTHONPATH=. python3 -m unittest discover -s tests
+cd proof-run && PYTHONPATH=. python3 -m unittest discover -s tests
 # 8 tests: record→contract, failed-run rejection, operator review gate, allow/block/unknown,
 # unrelated-tool passthrough, atomic rebind, persistence, concurrency.
 ```
