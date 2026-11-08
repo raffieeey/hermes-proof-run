@@ -17,9 +17,16 @@ from pathlib import Path
 
 from .proof_run import core
 
+try:
+    from plugins.plugin_storage import plugin_data_dir as _host_data_dir
+except ImportError:
+    def _host_data_dir(name: str) -> Path:
+        from hermes_cli.config import get_hermes_home
+        return Path(get_hermes_home()) / "plugin-data" / name
+
 
 def _contracts_root(ctx) -> Path:
-    return Path(ctx.plugin_data_dir("proof-run"))
+    return _host_data_dir("proof-run")
 
 
 def _active_recorders(ctx) -> dict:
@@ -61,13 +68,15 @@ def _on_post_tool_call(ctx, tool_name, args, result, **kwargs):
         rec.note_tool(tool_name, args, result)
     # Always buffer calls so /proof learn can draft retroactively.
     buf = _session_buffer(ctx)
-    buf.append({"tool": tool_name, "args": dict(args or {}), "result": result})
+    buf.append({"tool": tool_name, "args": dict(args or {}), "result": result, "session": session_id})
     if len(buf) > _SESSION_BUFFER_MAX:
         del buf[: len(buf) - _SESSION_BUFFER_MAX]
-    # Cache the result for enforcement: if any bound contract uses this
-    # tool as a precondition source, store its latest output.
-    if isinstance(result, dict):
-        _runtime_cache(ctx)[tool_name] = result
+    # B5: cache the result keyed by tool name (per-session) for enforcement.
+    # Only store results from the current session to avoid cross-contamination.
+    if isinstance(result, dict) and session_id:
+        cache = _runtime_cache(ctx)
+        cache.setdefault(session_id, {})
+        cache[session_id][tool_name] = result
     return None
 
 
@@ -81,7 +90,9 @@ def _on_pre_tool_call(ctx, tool_name, args, **kwargs):
     contracts_dir = _contracts_root(ctx) / "contracts"
     if not contracts_dir.exists():
         return None
-    runtime = _runtime_cache(ctx)
+    # B5: use the current session's runtime cache, not a global one.
+    all_runtime = _runtime_cache(ctx)
+    runtime = all_runtime.get(session_id, {})
     for path in sorted(contracts_dir.glob("*.json")):
         try:
             contract = json.loads(path.read_text(encoding="utf-8"))
