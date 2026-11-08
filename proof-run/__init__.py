@@ -37,6 +37,25 @@ def _find_recorder(ctx, session_id):
     return rec
 
 
+def _runtime_cache(ctx) -> dict:
+    """Latest results from read-only tools, used as runtime state for enforcement."""
+    if not hasattr(ctx, "_proof_run_runtime"):
+        ctx._proof_run_runtime = {}
+    return ctx._proof_run_runtime
+
+
+def _on_post_tool_call(ctx, tool_name, args, result, **kwargs):
+    session_id = kwargs.get("session_id") or "default"
+    rec = _find_recorder(ctx, session_id)
+    if rec is not None:
+        rec.note_tool(tool_name, args, result)
+    # Cache the result for enforcement: if any bound contract uses this
+    # tool as a precondition source, store its latest output.
+    if isinstance(result, dict):
+        _runtime_cache(ctx)[tool_name] = result
+    return None
+
+
 def _on_pre_tool_call(ctx, tool_name, args, **kwargs):
     session_id = kwargs.get("session_id") or "default"
     rec = _find_recorder(ctx, session_id)
@@ -47,6 +66,7 @@ def _on_pre_tool_call(ctx, tool_name, args, **kwargs):
     contracts_dir = _contracts_root(ctx) / "contracts"
     if not contracts_dir.exists():
         return None
+    runtime = _runtime_cache(ctx)
     for path in sorted(contracts_dir.glob("*.json")):
         try:
             contract = json.loads(path.read_text(encoding="utf-8"))
@@ -56,19 +76,9 @@ def _on_pre_tool_call(ctx, tool_name, args, **kwargs):
             continue
         if tool_name not in contract.get("action_window", {}).get("mutating_tools", []):
             continue
-        runtime = kwargs.get("runtime") or {}
         verdict = core.check_contract(contract, runtime=runtime, proposed_call={"tool": tool_name, "args": args})
         if verdict and verdict["action"] == "block":
             return verdict
-    return None
-
-
-def _on_post_tool_call(ctx, tool_name, args, result, **kwargs):
-    session_id = kwargs.get("session_id") or "default"
-    rec = _find_recorder(ctx, session_id)
-    if rec is None:
-        return None
-    rec.note_tool(tool_name, args, result)
     return None
 
 
