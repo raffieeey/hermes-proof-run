@@ -1,23 +1,137 @@
-=== /proof start ===
-Recording 'move-stock' — do the task once, then /proof stop.
+Executed synthetic regression evidence, not model inference or a production deployment.
+Command: python3 scripts/verify_host.py --host-source <provisioned-hermes-checkout>
 
-=== /proof stop ===
-Contract drafted for 'move-stock'.
-Mutating tools: stock_move
-Review the JSON at ~/.hermes/proof-run-demo/plugin-data/proof-run/contracts/move-stock.json, then /proof bind move-stock.
-
-=== /proof bind move-stock ===
-Contract move-stock bound.
-
-=== drift: stock drops to 1; attempted stock_move ===
-[{'action': 'block', 'message': 'Contract move-stock: precondition stock_level.available >= 3, current 1'}]
-
-=== /proof rebind move-stock ===
-Rebinding 'move-stock' — do the corrected task once, then /proof stop.
-Contract drafted for 'move-stock'.
-Mutating tools: stock_move
-Review the JSON at ~/.hermes/proof-run-demo/plugin-data/proof-run/contracts/move-stock.json, then /proof bind move-stock.
-Contract move-stock bound.
-
-=== after rebind: stock_move qty=1 passes ===
-[]
+{
+  "host_commit": "a2db0efb2969d2527d27bf95a53066f5e064d9ad",
+  "mode": "in_process",
+  "unit_storage_tests_passed": 34,
+  "host_checks": {
+    "total": 24,
+    "passed": 24,
+    "failed": 0,
+    "network_attempts": 0
+  },
+  "selected_observations": [
+    {
+      "area": "host",
+      "id": "H3-real-registry-mutation",
+      "criterion": "C2",
+      "passed": true,
+      "expected": "real handle_function_call runs matching mutation and stops drift before handler execution",
+      "observed": {
+        "stop": "Contract 'actual-registry' is live (v1).\nGating: deploy_service\nExact demonstrated arguments only. Fresh matching reads are required again.",
+        "allowed": "{\"deployed\": true}",
+        "blocked": "{\"error\": \"Contract actual-registry: precondition check_service_health.status == healthy, current unhealthy\"}",
+        "counts": [
+          1,
+          2,
+          2
+        ]
+      }
+    },
+    {
+      "area": "host",
+      "id": "H5-fresh-manager-reload",
+      "criterion": "C2",
+      "passed": true,
+      "expected": "bound contract survives reload and unknown fresh-session facts block",
+      "observed": {
+        "blocked": true,
+        "message": "Contract deploy: precondition check_service_health.status is unknown",
+        "modified": null
+      }
+    },
+    {
+      "area": "outcomes",
+      "id": "O4-evidence-stop-survives-reload",
+      "criterion": "C3",
+      "passed": true,
+      "expected": "mismatching replay evidence persists unproven and blocks the next mutation after reload",
+      "observed": {
+        "status": "stock v1 bound=True evidence=unproven",
+        "persisted": "unproven",
+        "next_result": "{\"error\": \"contract outcome is unproven\"}",
+        "mutation_calls": 2
+      }
+    },
+    {
+      "area": "state",
+      "id": "S7-concurrent-observation-consumption",
+      "criterion": "C4",
+      "passed": true,
+      "expected": "two competing mutations cannot consume one read twice",
+      "observed": [
+        {
+          "blocked": true,
+          "message": "Contract deploy: precondition check_service_health.status is unknown",
+          "modified": null
+        },
+        {
+          "blocked": false,
+          "message": null,
+          "modified": null
+        }
+      ]
+    },
+    {
+      "area": "outcomes",
+      "id": "O5-secret-stop-refused",
+      "criterion": "C6",
+      "passed": true,
+      "expected": "activation never restores a recognized secret to a persisted contract",
+      "observed": {
+        "command": "stop",
+        "reply": "Contract not created or changed: recording contained unsafe or invalid data",
+        "contract_created": false,
+        "secret_persisted": false
+      }
+    },
+    {
+      "area": "outcomes",
+      "id": "O6-secret-learn-refused",
+      "criterion": "C6",
+      "passed": true,
+      "expected": "activation never restores a recognized secret to a persisted contract",
+      "observed": {
+        "command": "learn",
+        "reply": "Contract not created or changed: recording contains unsafe or invalid data",
+        "contract_created": false,
+        "secret_persisted": false
+      }
+    },
+    {
+      "area": "host",
+      "id": "H8-legacy-rebind-migration",
+      "criterion": "C6",
+      "passed": true,
+      "expected": "legacy rules remain quarantined until a fresh atomic schema-2 rebind",
+      "observed": {
+        "before": {
+          "blocked": true,
+          "message": "Proof Run: legacy contract requires /proof rebind before reuse",
+          "modified": null
+        },
+        "other_session_during_rebind": {
+          "blocked": true,
+          "message": "Proof Run: legacy contract requires /proof rebind before reuse",
+          "modified": null
+        },
+        "rebind": "Rebinding 'legacy'. Do the task once, then /proof stop.",
+        "stop": "Contract 'legacy' is live (v6).\nGating: deploy_service\nExact demonstrated arguments only. Fresh matching reads are required again.",
+        "schema": 2,
+        "version": 6
+      }
+    },
+    {
+      "area": "host",
+      "id": "H9-symlink-unbind-contained",
+      "criterion": "C6",
+      "passed": true,
+      "expected": "unbind refuses a symlink without modifying its external target",
+      "observed": {
+        "reply": "Contract not created or changed: unsafe or inaccessible contract storage: Too many levels of symbolic links",
+        "target_unchanged": true
+      }
+    }
+  ]
+}

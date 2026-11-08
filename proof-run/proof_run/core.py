@@ -3,6 +3,7 @@
 Storage uses Linux/POSIX flock and descriptor-relative, no-follow operations.
 The host adapter owns session isolation and consumption of read observations.
 """
+
 from __future__ import annotations
 
 import copy
@@ -30,7 +31,10 @@ _SECRET_PATTERNS = [
     re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}"),
     re.compile(r"\bAKIA[A-Z0-9]{16}\b"),
     re.compile(r"\beyJ[A-Za-z0-9_-]{10,}\.eyJ"),
-    re.compile(r"\b(?:api[_-]?key|token|password|secret|authorization)\s*[:=]\s*\S+", re.IGNORECASE),
+    re.compile(
+        r"\b(?:api[_-]?key|token|password|secret|authorization)\s*[:=]\s*\S+",
+        re.IGNORECASE,
+    ),
     re.compile(r"\bBearer\s+[A-Za-z0-9._~+/-]{8,}", re.IGNORECASE),
     re.compile(r"\bxox[bp]-[A-Za-z0-9-]{10,}"),
     re.compile(r"\bAIza[A-Za-z0-9_-]{30,}"),
@@ -39,19 +43,34 @@ _SECRET_PATTERNS = [
 ]
 _SENSITIVE_KEY = re.compile(
     r"(?:password|passwd|passphrase|(?:api|access|refresh|auth|id)[_-]?token|"
-    r"api[_-]?key|authorization|private[_-]?key|client[_-]?secret|^secret$|^token$)", re.IGNORECASE
+    r"api[_-]?key|authorization|private[_-]?key|client[_-]?secret|^secret$|^token$)",
+    re.IGNORECASE,
 )
 READ_ONLY_TOOLS = {
-    "read_file", "list_dir", "search_files", "web_search", "web_extract",
-    "vision_analyze", "skill_view", "session_search", "stock_level",
-    "git_status", "git_log", "git_diff", "check_service_health", "read_config",
-    "get_status", "list_services",
+    "read_file",
+    "list_dir",
+    "search_files",
+    "web_search",
+    "web_extract",
+    "vision_analyze",
+    "skill_view",
+    "session_search",
+    "stock_level",
+    "git_status",
+    "git_log",
+    "git_diff",
+    "check_service_health",
+    "read_config",
+    "get_status",
+    "list_services",
 }
 
 
 def _validate_contract_name(name: str) -> str:
     if not isinstance(name, str) or not _CONTRACT_NAME_RE.fullmatch(name):
-        raise ContractError("invalid contract name: use letters, digits, hyphens, underscores (max 64)")
+        raise ContractError(
+            "invalid contract name: use letters, digits, hyphens, underscores (max 64)"
+        )
     return name
 
 
@@ -61,7 +80,7 @@ def _reject_secrets(value: Any) -> None:
         if any(pattern.search(value) for pattern in _SECRET_PATTERNS):
             raise ContractError("recording or contract contains a known secret pattern")
         # Host results commonly arrive as JSON-encoded strings.
-        if value.lstrip().startswith(('{', '[')):
+        if value.lstrip().startswith(("{", "[")):
             try:
                 parsed = json.loads(value)
             except (ValueError, RecursionError):
@@ -71,7 +90,9 @@ def _reject_secrets(value: Any) -> None:
     elif isinstance(value, dict):
         for key, item in value.items():
             if isinstance(key, str) and _SENSITIVE_KEY.search(key):
-                raise ContractError("recording or contract contains a sensitive named field")
+                raise ContractError(
+                    "recording or contract contains a sensitive named field"
+                )
             _reject_secrets(key)
             _reject_secrets(item)
     elif isinstance(value, (list, tuple)):
@@ -99,7 +120,9 @@ def _validate_json(value: Any) -> None:
 
 def _canonical(value: Any) -> str:
     _validate_json(value)
-    return json.dumps(value, sort_keys=True, ensure_ascii=True, separators=(',', ':'), allow_nan=False)
+    return json.dumps(
+        value, sort_keys=True, ensure_ascii=True, separators=(",", ":"), allow_nan=False
+    )
 
 
 def fact_key(tool: str, args: dict) -> str:
@@ -120,8 +143,18 @@ def _parse_result(result: Any) -> Any:
 
 
 _FAILURE_STATUSES = {
-    "error", "tool_error", "failed", "failure", "cancelled", "canceled", "blocked",
-    "denied", "interrupted", "aborted", "timeout", "timed_out",
+    "error",
+    "tool_error",
+    "failed",
+    "failure",
+    "cancelled",
+    "canceled",
+    "blocked",
+    "denied",
+    "interrupted",
+    "aborted",
+    "timeout",
+    "timed_out",
 }
 
 
@@ -137,7 +170,17 @@ def _is_error_result(result: Any, **metadata: Any) -> bool:
             return True
         if data.get("success") is False or data.get("is_error") is True:
             return True
-        if any(data.get(key) for key in ("error", "error_type", "error_message", "cancelled", "canceled", "blocked")):
+        if any(
+            data.get(key)
+            for key in (
+                "error",
+                "error_type",
+                "error_message",
+                "cancelled",
+                "canceled",
+                "blocked",
+            )
+        ):
             return True
         if "exit_code" in data:
             code = data["exit_code"]
@@ -153,8 +196,13 @@ def _compare(current: Any, op: str, expected: Any) -> bool:
         if op == "==":
             return _canonical(current) == _canonical(expected)
         if op == ">=":
-            return (type(current) in (int, float) and type(expected) in (int, float)
-                    and math.isfinite(current) and math.isfinite(expected) and current >= expected)
+            return (
+                type(current) in (int, float)
+                and type(expected) in (int, float)
+                and math.isfinite(current)
+                and math.isfinite(expected)
+                and current >= expected
+            )
         if op == "sha256==":
             return isinstance(expected, str) and _digest(current) == expected
     except (ContractError, TypeError, ValueError, OverflowError):
@@ -172,69 +220,119 @@ def _contains_long_text(value: Any) -> bool:
     if isinstance(value, list):
         return any(_contains_long_text(x) for x in value)
     if isinstance(value, dict):
-        return any(_is_blob_field(k) or _contains_long_text(v) for k, v in value.items())
+        return any(
+            _is_blob_field(k) or _contains_long_text(v) for k, v in value.items()
+        )
     return False
 
 
 def _is_blob_field(field: str) -> bool:
-    return any(part in field.lower() for part in ("text", "output", "content", "log", "html", "body"))
+    return any(
+        part in field.lower()
+        for part in ("text", "output", "content", "log", "html", "body")
+    )
 
 
-def _predicate(kind: str, tool: str, field: str, value: Any, args: dict | None = None) -> dict:
+def _predicate(
+    kind: str, tool: str, field: str, value: Any, args: dict | None = None
+) -> dict:
     _validate_json(value)
     digest = _is_blob_field(field) or _contains_long_text(value)
-    p = {"kind": kind, "tool": tool, "field": field,
-         "op": "sha256==" if digest else "==", "value": _digest(value) if digest else copy.deepcopy(value)}
+    p = {
+        "kind": kind,
+        "tool": tool,
+        "field": field,
+        "op": "sha256==" if digest else "==",
+        "value": _digest(value) if digest else copy.deepcopy(value),
+    }
     if args is not None:
         p["args_match"] = copy.deepcopy(args)
     return p
 
 
 def _validate_predicate(p: Any, kind: str, tool: str | None = None) -> None:
-    if not isinstance(p, dict) or not {"kind", "tool", "field", "op", "value"} <= p.keys():
+    if (
+        not isinstance(p, dict)
+        or not {"kind", "tool", "field", "op", "value"} <= p.keys()
+    ):
         raise ContractError("invalid predicate")
     if p["kind"] != kind or not isinstance(p["tool"], str) or not p["tool"]:
         raise ContractError("invalid predicate kind or tool")
     if tool is not None and p["tool"] != tool:
         raise ContractError("evidence tool does not match step")
-    if not isinstance(p["field"], str) or not p["field"] or p["op"] not in ("==", "sha256=="):
+    if (
+        not isinstance(p["field"], str)
+        or not p["field"]
+        or p["op"] not in ("==", "sha256==")
+    ):
         raise ContractError("invalid predicate field or operator")
-    if p["op"] == "sha256==" and (not isinstance(p["value"], str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", p["value"])):
+    if p["op"] == "sha256==" and (
+        not isinstance(p["value"], str)
+        or not re.fullmatch(r"sha256:[0-9a-f]{64}", p["value"])
+    ):
         raise ContractError("invalid digest")
     _validate_json(p["value"])
     if kind == "tool_fact":
-        if p["tool"] not in READ_ONLY_TOOLS or not isinstance(p.get("args_match"), dict):
+        if p["tool"] not in READ_ONLY_TOOLS or not isinstance(
+            p.get("args_match"), dict
+        ):
             raise ContractError("invalid fact predicate")
         _validate_json(p["args_match"])
 
 
 def _validate_v2(contract: Any) -> None:
-    required = {"schema_version", "contract_id", "version", "bound", "action_window",
-                "preconditions", "success_evidence", "provenance", "steps"}
+    required = {
+        "schema_version",
+        "contract_id",
+        "version",
+        "bound",
+        "action_window",
+        "preconditions",
+        "success_evidence",
+        "provenance",
+        "steps",
+    }
     if not isinstance(contract, dict) or not required <= contract.keys():
         raise ContractError("missing contract safety fields")
     if type(contract["schema_version"]) is not int or contract["schema_version"] != 2:
         raise ContractError("unsupported contract schema")
     _validate_contract_name(contract["contract_id"])
-    if type(contract["version"]) is not int or contract["version"] < 1 or type(contract["bound"]) is not bool:
+    if (
+        type(contract["version"]) is not int
+        or contract["version"] < 1
+        or type(contract["bound"]) is not bool
+    ):
         raise ContractError("invalid contract version or bound state")
     if contract.get("evidence_status", "proven") not in ("proven", "unproven"):
         raise ContractError("invalid evidence status")
     window = contract["action_window"]
-    if not isinstance(window, dict) or not isinstance(window.get("mutating_tools"), list):
+    if not isinstance(window, dict) or not isinstance(
+        window.get("mutating_tools"), list
+    ):
         raise ContractError("invalid action window")
     tools = window["mutating_tools"]
-    if not tools or any(not isinstance(t, str) or not t or t in READ_ONLY_TOOLS for t in tools) or len(set(tools)) != len(tools):
+    if (
+        not tools
+        or any(not isinstance(t, str) or not t or t in READ_ONLY_TOOLS for t in tools)
+        or len(set(tools)) != len(tools)
+    ):
         raise ContractError("invalid guarded tools")
     steps = contract["steps"]
     if not isinstance(steps, list) or not steps:
         raise ContractError("missing observed steps")
     all_pre, all_evidence, step_tools = [], [], set()
     for step in steps:
-        if not isinstance(step, dict) or not {"tool", "args", "preconditions", "success_evidence"} <= step.keys():
+        if (
+            not isinstance(step, dict)
+            or not {"tool", "args", "preconditions", "success_evidence"} <= step.keys()
+        ):
             raise ContractError("invalid observed step")
         tool = step["tool"]
-        if not isinstance(tool, str) or tool not in tools or not isinstance(step["args"], dict):
+        if (
+            not isinstance(tool, str)
+            or tool not in tools
+            or not isinstance(step["args"], dict)
+        ):
             raise ContractError("invalid step tool or arguments")
         _validate_json(step["args"])
         pre, evidence = step["preconditions"], step["success_evidence"]
@@ -249,12 +347,20 @@ def _validate_v2(contract: Any) -> None:
         step_tools.add(tool)
     if step_tools != set(tools):
         raise ContractError("guarded tools differ from observed steps")
-    if not isinstance(contract["preconditions"], list) or _canonical(contract["preconditions"]) != _canonical(all_pre):
+    if not isinstance(contract["preconditions"], list) or _canonical(
+        contract["preconditions"]
+    ) != _canonical(all_pre):
         raise ContractError("inconsistent preconditions")
-    if not isinstance(contract["success_evidence"], list) or _canonical(contract["success_evidence"]) != _canonical(all_evidence):
+    if not isinstance(contract["success_evidence"], list) or _canonical(
+        contract["success_evidence"]
+    ) != _canonical(all_evidence):
         raise ContractError("inconsistent success evidence")
     provenance = contract["provenance"]
-    if not isinstance(provenance, dict) or type(provenance.get("recorded_calls")) is not int or provenance["recorded_calls"] < len(steps):
+    if (
+        not isinstance(provenance, dict)
+        or type(provenance.get("recorded_calls")) is not int
+        or provenance["recorded_calls"] < len(steps)
+    ):
         raise ContractError("invalid provenance")
     _validate_json(contract)
     _reject_secrets(contract)
@@ -266,8 +372,12 @@ def _validate_persisted(contract: Any, name: str) -> None:
         if "steps" in contract or "evidence_status" in contract:
             raise ContractError("malformed contract schema")
         required = {"contract_id", "version", "bound"}
-        if (not required <= contract.keys() or type(contract["version"]) is not int or contract["version"] < 1
-                or type(contract["bound"]) is not bool):
+        if (
+            not required <= contract.keys()
+            or type(contract["version"]) is not int
+            or contract["version"] < 1
+            or type(contract["bound"]) is not bool
+        ):
             raise ContractError("malformed legacy contract")
         _validate_json(contract)
         _reject_secrets(contract)
@@ -285,12 +395,18 @@ def check_evidence(step: dict, result: Any, **metadata: Any) -> bool:
         if not isinstance(step, dict) or not isinstance(step.get("tool"), str):
             return False
         evidence = step.get("success_evidence")
-        if not isinstance(parsed, dict) or not isinstance(evidence, list) or not evidence:
+        if (
+            not isinstance(parsed, dict)
+            or not isinstance(evidence, list)
+            or not evidence
+        ):
             return False
         for pred in evidence:
             _validate_predicate(pred, "tool_result_field", step["tool"])
             field = pred["field"]
-            if field not in parsed or not _compare(parsed[field], pred["op"], pred["value"]):
+            if field not in parsed or not _compare(
+                parsed[field], pred["op"], pred["value"]
+            ):
                 return False
         return True
     except (ContractError, TypeError, ValueError, KeyError):
@@ -303,14 +419,18 @@ def _check_legacy(contract: dict, runtime: dict, proposed: dict) -> dict | None:
     args = proposed.get("args") or {}
     if tool not in contract["action_window"]["mutating_tools"]:
         return None
-    for key, pattern in contract["action_window"].get("allowed_arg_patterns", {}).get(tool, {}).items():
+    for key, pattern in (
+        contract["action_window"].get("allowed_arg_patterns", {}).get(tool, {}).items()
+    ):
         if key not in args:
             return {"action": "block", "message": f"argument {key} is missing"}
         actual = args[key]
         if isinstance(pattern, dict) and "any" in pattern:
             matched = any(_compare(actual, "==", p) for p in pattern["any"])
         elif isinstance(pattern, dict) and "min" in pattern:
-            matched = _compare(actual, ">=", pattern["min"]) and _compare(pattern["max"], ">=", actual)
+            matched = _compare(actual, ">=", pattern["min"]) and _compare(
+                pattern["max"], ">=", actual
+            )
         else:
             matched = _compare(actual, "==", pattern)
         if not matched:
@@ -318,17 +438,40 @@ def _check_legacy(contract: dict, runtime: dict, proposed: dict) -> dict | None:
     for pre in contract.get("preconditions") or []:
         observed = runtime.get(pre["tool"])
         if not isinstance(observed, dict) or pre["field"] not in observed:
-            return {"action": "block", "message": f"precondition {pre['tool']}.{pre['field']} is unknown"}
+            return {
+                "action": "block",
+                "message": f"precondition {pre['tool']}.{pre['field']} is unknown",
+            }
         current = observed[pre["field"]]
         if not _compare(current, pre["op"], pre["value"]):
-            return {"action": "block", "message": f"precondition {pre['tool']}.{pre['field']} {pre['op']} {pre['value']}, current {current}"}
+            return {
+                "action": "block",
+                "message": f"precondition {pre['tool']}.{pre['field']} {pre['op']} {pre['value']}, current {current}",
+            }
     return {"action": "allow"}
 
 
-def check_contract(contract: dict, *, runtime: dict, proposed_call: dict) -> dict | None:
+def _display_fact(value: Any, *, digest: bool = False) -> str:
+    if digest:
+        return _digest(value)
+    try:
+        _reject_secrets(value)
+    except ContractError:
+        return "[sensitive value]"
+    text = value if isinstance(value, str) else _canonical(value)
+    return text.replace("\n", "\\n")[:160]
+
+
+def check_contract(
+    contract: dict, *, runtime: dict, proposed_call: dict
+) -> dict | None:
     """Match a complete observed step and all of that step's fresh facts."""
     try:
-        if not isinstance(contract, dict) or not isinstance(runtime, dict) or not isinstance(proposed_call, dict):
+        if (
+            not isinstance(contract, dict)
+            or not isinstance(runtime, dict)
+            or not isinstance(proposed_call, dict)
+        ):
             raise ContractError("invalid gate input")
         if "schema_version" not in contract:
             if any(key in contract for key in ("steps", "evidence_status", "bound")):
@@ -343,20 +486,42 @@ def check_contract(contract: dict, *, runtime: dict, proposed_call: dict) -> dic
         if contract.get("evidence_status") == "unproven":
             return {"action": "block", "message": "contract outcome is unproven"}
         wanted = _canonical(args)
+        reason = None
         for index, step in enumerate(contract["steps"]):
             if step["tool"] != tool or _canonical(step["args"]) != wanted:
                 continue
             passed = True
             for pred in step["preconditions"]:
                 observed = runtime.get(fact_key(pred["tool"], pred["args_match"]))
-                if (not isinstance(observed, dict) or pred["field"] not in observed
-                        or not _compare(observed[pred["field"]], pred["op"], pred["value"])):
+                fact = f"Contract {contract['contract_id']}: precondition {pred['tool']}.{pred['field']}"
+                if not isinstance(observed, dict) or pred["field"] not in observed:
+                    reason = {"action": "block", "message": f"{fact} is unknown"}
+                    passed = False
+                    break
+                current = observed[pred["field"]]
+                if not _compare(current, pred["op"], pred["value"]):
+                    expected = _display_fact(pred["value"])
+                    actual = _display_fact(current, digest=pred["op"] == "sha256==")
+                    reason = {
+                        "action": "block",
+                        "message": f"{fact} {pred['op']} {expected}, current {actual}",
+                    }
                     passed = False
                     break
             if passed:
                 return {"action": "allow", "step_index": index}
-        return {"action": "block", "message": "no observed step has matching arguments and proven preconditions"}
-    except (ContractError, KeyError, TypeError, ValueError, OverflowError, RecursionError):
+        return reason or {
+            "action": "block",
+            "message": f"Contract {contract['contract_id']}: arguments do not match a demonstrated {tool} call",
+        }
+    except (
+        ContractError,
+        KeyError,
+        TypeError,
+        ValueError,
+        OverflowError,
+        RecursionError,
+    ):
         return {"action": "block", "message": "invalid contract or gate input"}
 
 
@@ -372,8 +537,14 @@ class Recorder:
             raise ContractError("invalid intent")
         _reject_secrets(intent)
         with self._lock:
-            self._active = {"contract_id": contract_id, "intent": intent, "reads": {},
-                            "steps": [], "count": 0, "rejected": False}
+            self._active = {
+                "contract_id": contract_id,
+                "intent": intent,
+                "reads": {},
+                "steps": [],
+                "count": 0,
+                "rejected": False,
+            }
 
     def note_tool(self, tool: str, args: dict, result: Any, **metadata: Any) -> None:
         with self._lock:
@@ -384,7 +555,9 @@ class Recorder:
                 if not isinstance(tool, str) or not tool or not isinstance(args, dict):
                     raise ContractError("invalid tool call")
                 _validate_json(args)
-                _reject_secrets({"tool": tool, "args": args, "result": result, "metadata": metadata})
+                _reject_secrets(
+                    {"tool": tool, "args": args, "result": result, "metadata": metadata}
+                )
                 active["count"] += 1
                 if _is_error_result(result, **metadata):
                     active["rejected"] = True
@@ -396,12 +569,20 @@ class Recorder:
                         for field, value in parsed.items():
                             if not isinstance(field, str) or not field:
                                 raise ContractError("invalid result field")
-                            predicates.append(_predicate("tool_fact", tool, field, value, args))
+                            predicates.append(
+                                _predicate("tool_fact", tool, field, value, args)
+                            )
                     active["reads"][fact_key(tool, args)] = predicates
                     return
-                if (not isinstance(parsed, dict) or not parsed
-                        or not any(value is not None and not (isinstance(value, (str, list, dict)) and not value)
-                                   for value in parsed.values())):
+                if (
+                    not isinstance(parsed, dict)
+                    or not parsed
+                    or not any(
+                        value is not None
+                        and not (isinstance(value, (str, list, dict)) and not value)
+                        for value in parsed.values()
+                    )
+                ):
                     active["rejected"] = True
                     return
                 evidence = []
@@ -409,13 +590,22 @@ class Recorder:
                     if not isinstance(field, str) or not field:
                         raise ContractError("invalid result field")
                     evidence.append(_predicate("tool_result_field", tool, field, value))
-                active["steps"].append({"tool": tool, "args": copy.deepcopy(args),
-                                        "preconditions": [p for group in active["reads"].values() for p in group],
-                                        "success_evidence": evidence})
+                active["steps"].append(
+                    {
+                        "tool": tool,
+                        "args": copy.deepcopy(args),
+                        "preconditions": [
+                            p for group in active["reads"].values() for p in group
+                        ],
+                        "success_evidence": evidence,
+                    }
+                )
                 active["reads"] = {}
             except (ContractError, TypeError, ValueError, RecursionError):
                 active["rejected"] = True
-                raise ContractError("recording contains unsafe or invalid data") from None
+                raise ContractError(
+                    "recording contains unsafe or invalid data"
+                ) from None
 
     def stop(self, success: bool = True, bound: bool = False) -> dict:
         with self._lock:
@@ -425,14 +615,23 @@ class Recorder:
             if success is not True or active["rejected"]:
                 raise ContractError("recording contained a failed or unproven call")
             if type(bound) is not bool or not active["steps"]:
-                raise ContractError("recording has no successful mutation or invalid binding")
+                raise ContractError(
+                    "recording has no successful mutation or invalid binding"
+                )
             steps = active["steps"]
-            contract = {"schema_version": 2, "contract_id": active["contract_id"], "version": 1,
-                        "intent": active["intent"], "bound": bound, "evidence_status": "proven",
-                        "action_window": {"mutating_tools": sorted({s["tool"] for s in steps})},
-                        "preconditions": [p for s in steps for p in s["preconditions"]],
-                        "success_evidence": [p for s in steps for p in s["success_evidence"]],
-                        "provenance": {"recorded_calls": active["count"]}, "steps": steps}
+            contract = {
+                "schema_version": 2,
+                "contract_id": active["contract_id"],
+                "version": 1,
+                "intent": active["intent"],
+                "bound": bound,
+                "evidence_status": "proven",
+                "action_window": {"mutating_tools": sorted({s["tool"] for s in steps})},
+                "preconditions": [p for s in steps for p in s["preconditions"]],
+                "success_evidence": [p for s in steps for p in s["success_evidence"]],
+                "provenance": {"recorded_calls": active["count"]},
+                "steps": steps,
+            }
             return save_contract(self.root, contract, new_version=True)
 
 
@@ -485,7 +684,9 @@ def _contracts_fd(root: Path, create: bool):
                 os.fchmod(fd, 0o700)
         yield fd
     except OSError as exc:
-        raise ContractError(f"unsafe or inaccessible contract storage: {exc.strerror or 'I/O failure'}") from exc
+        raise ContractError(
+            f"unsafe or inaccessible contract storage: {exc.strerror or 'I/O failure'}"
+        ) from exc
     finally:
         for fd in reversed(fds):
             os.close(fd)
@@ -527,14 +728,20 @@ def _read_contract(directory: int, name: str) -> tuple[dict | None, bytes | None
     return contract, data
 
 
-def _atomic_write(directory: int, filename: str, data: bytes, *, rollback: bool = False) -> None:
+def _atomic_write(
+    directory: int, filename: str, data: bytes, *, rollback: bool = False
+) -> None:
     # Inspect an existing target without following it; temp names are exclusive.
     existing = _read_bytes(directory, filename)
     temporary = ".proof-" + secrets.token_hex(16) + ".tmp"
     fd = None
     try:
-        fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
-                     0o600, dir_fd=directory)
+        fd = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW,
+            0o600,
+            dir_fd=directory,
+        )
         os.fchmod(fd, 0o600)
         view = memoryview(data)
         while view:
@@ -557,7 +764,9 @@ def _atomic_write(directory: int, filename: str, data: bytes, *, rollback: bool 
                     else:
                         _atomic_write(directory, filename, existing, rollback=True)
                 except OSError as rollback_error:
-                    raise ContractError("directory sync failed and rollback could not be confirmed") from rollback_error
+                    raise ContractError(
+                        "directory sync failed and rollback could not be confirmed"
+                    ) from rollback_error
             raise
     finally:
         if fd is not None:
@@ -570,8 +779,12 @@ def _atomic_write(directory: int, filename: str, data: bytes, *, rollback: bool 
 
 @contextmanager
 def _name_lock(directory: int, name: str):
-    fd = os.open("." + name + ".lock", os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW,
-                 0o600, dir_fd=directory)
+    fd = os.open(
+        "." + name + ".lock",
+        os.O_RDWR | os.O_CREAT | os.O_CLOEXEC | os.O_NOFOLLOW,
+        0o600,
+        dir_fd=directory,
+    )
     try:
         _check_regular(fd)
         os.fchmod(fd, 0o600)
@@ -637,7 +850,10 @@ def _save_locked(directory: int, contract: dict, new_version: bool) -> dict:
     elif prior is not None and value["version"] != prior["version"]:
         raise ContractError("contract version changed")
     _validate_v2(value)
-    payload = (json.dumps(value, sort_keys=True, indent=1, ensure_ascii=True, allow_nan=False) + "\n").encode("utf-8")
+    payload = (
+        json.dumps(value, sort_keys=True, indent=1, ensure_ascii=True, allow_nan=False)
+        + "\n"
+    ).encode("utf-8")
     _atomic_write(directory, name + ".json", payload)
     return value
 
@@ -654,11 +870,15 @@ def save_contract(root: Path, contract: dict, *, new_version: bool = False) -> d
             return _save_locked(directory, contract, new_version)
 
 
-def update_contract_state(root: Path, name: str, *, expected_version: int | None = None, **updates: Any) -> dict | None:
+def update_contract_state(
+    root: Path, name: str, *, expected_version: int | None = None, **updates: Any
+) -> dict | None:
     _validate_contract_name(name)
     if set(updates) - {"bound", "evidence_status", "last_check"}:
         raise ContractError("unsupported contract state field")
-    if expected_version is not None and (type(expected_version) is not int or expected_version < 1):
+    if expected_version is not None and (
+        type(expected_version) is not int or expected_version < 1
+    ):
         raise ContractError("invalid expected version")
     _validate_json(updates)
     _reject_secrets(updates)

@@ -1,0 +1,28 @@
+name: Checks
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  unit:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.11", "3.12", "3.13", "3.14"]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Core and storage regression tests
+        working-directory: proof-run
+        env:
+          PYTHONPATH: .
+        run: python -m unittest discover -s tests -v
+      - name: Compile plugin and host verification script
+        run: python -m compileall -q proof-run scripts
+      - name: Whitespace checks
+        run: git diff --check
