@@ -1,0 +1,18 @@
+name: proof-run
+version: "0.1.0"
+description: "Turn a successful Hermes run into a live execution contract. Capture the tool-call sequence and success evidence once, then gate later mutating calls on the recorded preconditions so a changed world blocks instead of silently improvising. Operator-reviewed contracts, rebind on intentional drift, no network, no credentials."
+entry: __init__.py
+author: Deint (Hermes contest entry, design-assisted)
+license: MIT
+config:
+  refresh_on_demand:
+    type: bool
+    default: false
+    description: "No network is used by this plugin; setting reserved for future contract sources."
+permissions:
+  - read_config
+provides_hooks:
+  - pre_tool_call
+  - post_tool_call
+provides_tools: []
+provides_middleware: []

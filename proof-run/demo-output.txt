@@ -1,0 +1,23 @@
+=== /proof start ===
+Recording 'move-stock' — do the task once, then /proof stop.
+
+=== /proof stop ===
+Contract drafted for 'move-stock'.
+Mutating tools: stock_move
+Review the JSON at ~/.hermes/proof-run-demo/plugin-data/proof-run/contracts/move-stock.json, then /proof bind move-stock.
+
+=== /proof bind move-stock ===
+Contract move-stock bound.
+
+=== drift: stock drops to 1; attempted stock_move ===
+[{'action': 'block', 'message': 'Contract move-stock: precondition stock_level.available >= 3, current 1'}]
+
+=== /proof rebind move-stock ===
+Rebinding 'move-stock' — do the corrected task once, then /proof stop.
+Contract drafted for 'move-stock'.
+Mutating tools: stock_move
+Review the JSON at ~/.hermes/proof-run-demo/plugin-data/proof-run/contracts/move-stock.json, then /proof bind move-stock.
+Contract move-stock bound.
+
+=== after rebind: stock_move qty=1 passes ===
+[]
