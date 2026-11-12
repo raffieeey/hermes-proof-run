@@ -8,7 +8,7 @@ Proof Run records the checks and actions of a successful Hermes task, makes the 
 
 https://github.com/user-attachments/assets/a712c878-fc68-471e-ae21-008ff673e3de
 
-*Product overview. Unmute the player for audio.* [Watch separately](https://github.com/user-attachments/assets/a712c878-fc68-471e-ae21-008ff673e3de) · [Download the video](https://github.com/raffieeey/hermes-proof-run/releases/download/v0.2.0/proof-run-overview.mp4)
+*Product overview. Unmute the player for audio.* [Download the video](https://github.com/raffieeey/hermes-proof-run/releases/download/v0.2.0/proof-run-overview.mp4)
 
 ## Get started
 
