@@ -6,9 +6,9 @@ Proof Run records the checks and actions of a successful Hermes task, makes the 
 
 **v0.2.0** · Hermes Agent plugin · MIT
 
-[![Watch the Proof Run product overview](docs/assets/proof-run-overview.jpg)](https://video.twimg.com/amplify_video/2120154419841175552/vid/avc1/1280x720/dtBe-b4TaqjP1UsV.mp4?tag=29)
+https://github.com/user-attachments/assets/a712c878-fc68-471e-ae21-008ff673e3de
 
-[Watch the overview](https://video.twimg.com/amplify_video/2120154419841175552/vid/avc1/1280x720/dtBe-b4TaqjP1UsV.mp4?tag=29) · [Download the video](https://github.com/raffieeey/hermes-proof-run/releases/download/v0.2.0/proof-run-overview.mp4)
+*Product overview. Unmute the player for audio.* [Watch separately](https://github.com/user-attachments/assets/a712c878-fc68-471e-ae21-008ff673e3de) · [Download the video](https://github.com/raffieeey/hermes-proof-run/releases/download/v0.2.0/proof-run-overview.mp4)
 
 ## Get started
 
