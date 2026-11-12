@@ -1,0 +1,2498 @@
+diff --git a/agent/tool_executor.py b/agent/tool_executor.py
+index 6d46b0720c..7452cfde1d 100644
+--- a/agent/tool_executor.py
++++ b/agent/tool_executor.py
+@@ -670,6 +670,7 @@ def _pre_tool_block(agent, ref: _ToolCallRef):
+             ref.args,
+             **tool_hook_ids(agent, ref.task_id, ref.call_id),
+             middleware_trace=list(ref.trace),
++            execution_phase="transform",
+         )
+         return block_msg, (ref.args if modified_args is None else modified_args)
+     except Exception:
+@@ -693,68 +694,130 @@ def _dispatch_authorized_once(
+     ``begin_execution`` (concurrent start-order gate) is advanced exactly once on every
+     path so later-ordered workers keep moving; blocked calls advance it without a callback.
+     """
++    proposed_args = dict(ref.args) if isinstance(ref.args, dict) else {}
++    try:
++        from hermes_cli.profiles import get_active_profile_name
++        profile_id = str(get_active_profile_name() or "")
++    except Exception:
++        profile_id = ""
++    from hermes_cli.plugin_command_session import bind_agent_context
++
+     def _advance_start_order(callback=None) -> None:
+         if begin_execution is not None:
+             begin_execution(callback)
+         elif callback is not None:
+             callback()
+ 
+-    # Deny-by-default for a hosted scope, before plugin hooks, guardrails or any executor: every
+-    # sequential, concurrent and batched call reaches its executor (inline, memory provider, context
+-    # engine, registry) only through here.
+-    from tools.hosted_tool_policy import hosted_tool_refusal
+-    block_message, block_error_type = hosted_tool_refusal(ref.name), "hosted_tool_refused"
+-    if block_message is None:
+-        block_message, block_error_type = scope_block, "tool_scope_block"
+-    if block_message is None:
+-        block_error_type = "plugin_block"
+-        resolve = lambda: _pre_tool_block(agent, ref)
+-        block_message, ref.args = resolve() if authorization_gate is None else authorization_gate.run(resolve)
+-        state.args = ref.args
+-    block_body = None if block_message is None else {"error": block_message}
+-
+-    # Checked once, after plugin modify hooks (which may replace arguments) and
+-    # before guardrails or real dispatch: a copied compression marker in an
+-    # effect-capable argument must never reach the tool.
+-    if block_body is None:
+-        pruned_paths = _context_pruned_argument_paths(ref.name, ref.args)
+-        if pruned_paths:
+-            block_body = {
+-                "error": _PRUNED_TOOL_ARGUMENTS_ERROR,
+-                "message": _PRUNED_TOOL_ARGUMENTS_MESSAGE,
+-                "argument_paths": pruned_paths,
+-            }
+-            block_error_type = _PRUNED_TOOL_ARGUMENTS_ERROR
+-
+-    guardrail_decision = None
+-    if block_body is None:
+-        guardrail_decision = agent._tool_guardrails.before_call(ref.name, ref.args)
+-        if guardrail_decision.allows_execution:
+-            guardrail_decision = None
+-
+-    if block_body is not None or guardrail_decision is not None:
+-        _advance_start_order()
+-        state.blocked = True
+-        return _blocked_tool_result(
+-            agent, ref,
+-            block_body=block_body, block_error_type=block_error_type, guardrail_decision=guardrail_decision,
++    def _record_declined(message: str, error_code: str) -> None:
++        try:
++            from hermes_cli.checked_execution import record_blocked_attempt
++            record_blocked_attempt(
++                tool_name=ref.name,
++                proposed_args=proposed_args,
++                final_args=ref.args if isinstance(ref.args, dict) else {},
++                profile_id=profile_id,
++                session_id=str(getattr(agent, "session_id", "") or ""),
++                call_id=ref.call_id,
++                message=message,
++                error_code=error_code,
++            )
++        except Exception:
++            pass
++
++    with bind_agent_context(
++        agent, session_id=str(getattr(agent, "session_id", "") or ""), profile_id=profile_id,
++    ):
++        # Deny-by-default for a hosted scope, before plugin hooks, guardrails or any executor: every
++        # sequential, concurrent and batched call reaches its executor (inline, memory provider, context
++        # engine, registry) only through here.
++        from tools.hosted_tool_policy import hosted_tool_refusal
++        block_message, block_error_type = hosted_tool_refusal(ref.name), "hosted_tool_refused"
++        if block_message is None:
++            block_message, block_error_type = scope_block, "tool_scope_block"
++        if block_message is None:
++            block_error_type = "plugin_block"
++            resolve = lambda: _pre_tool_block(agent, ref)
++            block_message, ref.args = resolve() if authorization_gate is None else authorization_gate.run(resolve)
++            state.args = ref.args
++        block_body = None if block_message is None else {"error": block_message}
++
++        # Checked once, after plugin modify hooks (which may replace arguments) and
++        # before guardrails or real dispatch: a copied compression marker in an
++        # effect-capable argument must never reach the tool.
++        if block_body is None:
++            pruned_paths = _context_pruned_argument_paths(ref.name, ref.args)
++            if pruned_paths:
++                block_body = {
++                    "error": _PRUNED_TOOL_ARGUMENTS_ERROR,
++                    "message": _PRUNED_TOOL_ARGUMENTS_MESSAGE,
++                    "argument_paths": pruned_paths,
++                }
++                block_error_type = _PRUNED_TOOL_ARGUMENTS_ERROR
++
++        guardrail_decision = None
++        if block_body is None:
++            guardrail_decision = agent._tool_guardrails.before_call(ref.name, ref.args)
++            if guardrail_decision.allows_execution:
++                guardrail_decision = None
++
++        if block_body is not None or guardrail_decision is not None:
++            _advance_start_order()
++            state.blocked = True
++            if block_body is not None:
++                _record_declined(
++                    str(block_body.get("message") or block_body.get("error") or "blocked"),
++                    block_error_type or "POLICY_BLOCKED",
++                )
++            else:
++                _record_declined(
++                    getattr(guardrail_decision, "message", None) or "Tool blocked by guardrail policy",
++                    "GUARDRAIL_BLOCKED",
++                )
++            return _blocked_tool_result(
++                agent, ref,
++                block_body=block_body, block_error_type=block_error_type, guardrail_decision=guardrail_decision,
++            )
++
++        from hermes_cli.checked_execution import admit_checked_dispatch
++        from hermes_cli.plugins import get_plugin_manager
++        checked = admit_checked_dispatch(
++            tool_name=ref.name, proposed_args=proposed_args,
++            final_args=ref.args if isinstance(ref.args, dict) else {},
++            manager=get_plugin_manager(), agent=agent, profile_id=profile_id,
++            session_id=str(getattr(agent, "session_id", "") or ""),
++            tool_call_id=ref.call_id, task_id=ref.task_id,
++            turn_id=str(getattr(agent, "_current_turn_id", "") or ""),
++            conversation_id=conversation_id(agent),
+         )
++        if checked.blocked:
++            _advance_start_order()
++            state.blocked = True
++            return _blocked_tool_result(
++                agent, ref, block_body={"error": checked.message},
++                block_error_type="checked_execution_block", guardrail_decision=None,
++            )
++
++        if ref.name == "memory":
++            agent._turns_since_memory = 0
++        elif ref.name == "skill_manage":
++            agent._iters_since_skill = 0
++
++        from agent.terminal_approval_batch import prepare_current_terminal
++        prepare_current_terminal(ref)
++        _advance_start_order(lambda: _begin_tool_execution(agent, ref, display_index))
++        from agent.tool_progress_relay import bound_tool_progress
++        from tools.connectors.data_use import collect_data_use
++        with bound_tool_progress(agent.tool_progress_callback, ref.name, ref.call_id), collect_data_use() as data_use:
++            try:
++                result = _run_with_activity_heartbeat(agent, ref.name, lambda: execute(ref.args))
++                checked.complete(result)
++                return result
++            except Exception as exc:
++                checked.fail(exc)
++                raise
++            finally:
++                state.data_use = frozenset(data_use)
+ 
+-    if ref.name == "memory":
+-        agent._turns_since_memory = 0
+-    elif ref.name == "skill_manage":
+-        agent._iters_since_skill = 0
+-
+-    from agent.terminal_approval_batch import prepare_current_terminal
+-    prepare_current_terminal(ref)
+-    _advance_start_order(lambda: _begin_tool_execution(agent, ref, display_index))
+-    from agent.tool_progress_relay import bound_tool_progress
+-    from tools.connectors.data_use import collect_data_use
+-    with bound_tool_progress(agent.tool_progress_callback, ref.name, ref.call_id), collect_data_use() as data_use:
+-        try:
+-            return _run_with_activity_heartbeat(agent, ref.name, lambda: execute(ref.args))
+-        finally:
+-            state.data_use = frozenset(data_use)
+ 
+ 
+ def _run_agent_tool_execution_middleware(
+diff --git a/hermes_cli/checked_execution.py b/hermes_cli/checked_execution.py
+new file mode 100644
+index 0000000000..081fa2f270
+--- /dev/null
++++ b/hermes_cli/checked_execution.py
+@@ -0,0 +1,649 @@
++"""Generic checked tool execution: final authorizers, receipts, execute_checked.
++
++This is host-owned infrastructure. Plugins register authorizers and receipt sinks
++through PluginContext; core never imports a specific plugin.
++"""
++
++from __future__ import annotations
++
++import json
++import time
++import uuid
++from copy import deepcopy
++from dataclasses import dataclass, field
++from typing import Any, Callable, Optional
++
++CHECKED_EXECUTION_VERSION = "checked-execution/v1"
++RECEIPT_SCHEMA = "ExecutionReceipt.v1"
++AUTHORIZER_SLOT = "v1"
++SINK_SLOT = "v1"
++PHASE_CHECK = "check"
++PHASE_COMMIT = "commit"
++PHASE_BEFORE = "before_dispatch"
++PHASE_TERMINAL = "terminal"
++PHASE_TRANSFORM = "transform"
++AUTH_CONTEXT_MISSING = "AUTH_CONTEXT_MISSING"
++PLUGIN_HOST_REFUSAL = (
++    "checked execution authorizers, receipt sinks, and execute_checked cannot cross "
++    "the plugin-host process boundary in this release"
++)
++
++_receipt_seq = 0
++
++
++def checked_execution_capabilities() -> dict[str, Any]:
++    """Functionality discovery for checked-execution/v1 (not a consent capability)."""
++    return {
++        "version": CHECKED_EXECUTION_VERSION,
++        "final_authorization": True,
++        "mandatory_receipts": True,
++        "bound_context": True,
++        "plugin_host_supported": False,
++        "plugin_host_refusal": PLUGIN_HOST_REFUSAL,
++    }
++
++
++def _next_sequence() -> int:
++    global _receipt_seq
++    _receipt_seq += 1
++    return _receipt_seq
++
++
++def _copy_args(args: Any) -> dict[str, Any]:
++    if not isinstance(args, dict):
++        return {}
++    try:
++        return deepcopy(args)
++    except Exception:
++        return dict(args)
++
++
++def _copy_receipt(receipt: dict[str, Any]) -> dict[str, Any]:
++    try:
++        return deepcopy(receipt)
++    except Exception:
++        copied = dict(receipt)
++        copied["proposed_args"] = _copy_args(receipt.get("proposed_args"))
++        copied["final_args"] = _copy_args(receipt.get("final_args"))
++        return copied
++
++
++def _snapshot_context(context: dict[str, Any]) -> dict[str, Any]:
++    snap: dict[str, Any] = {}
++    for key, value in context.items():
++        if isinstance(value, (dict, list)):
++            try:
++                snap[key] = deepcopy(value)
++            except Exception:
++                snap[key] = list(value) if isinstance(value, list) else dict(value)
++        else:
++            snap[key] = value
++    return snap
++
++
++def _active_profile_id() -> str:
++    try:
++        from hermes_cli.profiles import get_active_profile_name
++        return str(get_active_profile_name() or "")
++    except Exception:
++        return ""
++
++
++def _bind_approval_reason(message: str, final_args: dict[str, Any]) -> str:
++    """Put the effective payload in the displayed approval reason."""
++    payload = json.dumps(final_args, ensure_ascii=False, sort_keys=True, default=str)
++    text = message or ""
++    if payload in text:
++        return text or payload
++    if text:
++        return f"{text}\nEffective arguments: {payload}"
++    return payload
++
++
++
++def build_receipt(
++    *,
++    phase: str,
++    call_id: str,
++    profile_id: str,
++    session_id: str,
++    run_id: str,
++    tool_name: str,
++    proposed_args: dict[str, Any],
++    final_args: dict[str, Any],
++    dispatched: bool,
++    disposition: str,
++    result: Any = "",
++    operation_identity: str = "",
++    policy_ref: str = "",
++    error_code: str = "",
++    error_message: str = "",
++    receipt_persisted: bool = False,
++    sequence: int = 0,
++) -> dict[str, Any]:
++    if not isinstance(result, str):
++        result = "" if result is None else json.dumps(result, ensure_ascii=False)
++    return {
++        "schema": RECEIPT_SCHEMA,
++        "phase": phase,
++        "call_id": call_id,
++        "profile_id": profile_id,
++        "session_id": session_id,
++        "run_id": run_id,
++        "tool_name": tool_name,
++        "proposed_args": _copy_args(proposed_args),
++        "final_args": _copy_args(final_args),
++        "dispatched": bool(dispatched),
++        "disposition": disposition,
++        "result": result,
++        "operation_identity": operation_identity,
++        "policy_ref": policy_ref,
++        "error_code": error_code or "",
++        "error_message": error_message or "",
++        "receipt_persisted": bool(receipt_persisted),
++        "sequence": sequence or _next_sequence(),
++        "ts_ns": time.time_ns(),
++    }
++
++
++def caller_owns_tool(manager: Any, plugin_id: str, tool_name: str) -> bool:
++    """True when *plugin_id* has an active host-ledger tool registration for *tool_name*."""
++    if not plugin_id or not tool_name:
++        return False
++    ledger = getattr(manager, "_ownership_ledger", {}) or {}
++    for rec in ledger.get(plugin_id, ()):
++        if getattr(rec, "active", False) and rec.kind == "tool" and rec.key == tool_name:
++            return True
++    return False
++
++
++def _iter_slot(manager: Any, attr: str, slot: str) -> list[Callable]:
++    mapping = getattr(manager, attr, None) or {}
++    return list(mapping.get(slot, ()))
++
++
++def _invoke_callback(manager: Any, kind: str, callback: Callable, payload: dict[str, Any]) -> Any:
++    from hermes_cli.plugins_dispatch import PluginDispatchMixin, _HOOK_SKIPPED
++
++    timeout = 0.0
++    with_timeout = getattr(manager, "_run_hook_callback_bounded", None)
++    if with_timeout is not None:
++        try:
++            from hermes_cli.plugins import _resolve_hook_callback_timeout
++            timeout = float(_resolve_hook_callback_timeout() or 0)
++        except Exception:
++            timeout = 0.0
++    if timeout and with_timeout is not None:
++        ret = with_timeout(kind, callback, payload, timeout)
++        if ret is _HOOK_SKIPPED:
++            raise TimeoutError(f"{kind} callback timed out")
++        return ret
++    return PluginDispatchMixin._invoke_hook_callback(callback, payload)
++
++
++def _block_message(result: Any) -> Optional[str]:
++    if not isinstance(result, dict):
++        return None
++    if result.get("action") != "block":
++        return None
++    message = result.get("message")
++    if isinstance(message, str) and message.strip():
++        return message.strip()
++    return "blocked by tool authorizer"
++
++
++@dataclass
++class _Gate:
++    blocked: bool = False
++    message: str = ""
++    error_code: str = ""
++    check_ok: bool = True
++
++
++def run_authorizers(
++    manager: Any, tool_name: str, final_args: dict[str, Any], *, phase: str, context: dict[str, Any],
++) -> _Gate:
++    """Run every registered authorizer at *phase*. Errors/timeouts fail closed. No modify."""
++    gate = _Gate()
++    for callback in _iter_slot(manager, "_tool_authorizers", AUTHORIZER_SLOT):
++        payload = {
++            "tool_name": tool_name,
++            "tool_args": _copy_args(final_args),
++            "phase": phase,
++            **_snapshot_context(context),
++        }
++        try:
++            result = _invoke_callback(manager, "tool_authorizer", callback, payload)
++        except Exception as exc:
++            gate.blocked = True
++            gate.check_ok = False
++            gate.error_code = "AUTHORIZER_ERROR"
++            gate.message = f"tool authorizer failed: {exc}"
++            return gate
++        message = _block_message(result)
++        if message:
++            gate.blocked = True
++            gate.check_ok = False
++            gate.error_code = "AUTHORIZER_BLOCKED"
++            gate.message = message
++            return gate
++    return gate
++
++
++def emit_receipts(manager: Any, receipt: dict[str, Any], *, phase: str) -> tuple[bool, str]:
++    """Call mandatory sinks. Return (ok, error_message). Each sink gets an isolated snapshot."""
++    for callback in _iter_slot(manager, "_execution_receipt_sinks", SINK_SLOT):
++        payload = {"receipt": _copy_receipt(receipt), "phase": phase}
++        try:
++            _invoke_callback(manager, "execution_receipt_sink", callback, payload)
++        except Exception as exc:
++            return False, str(exc)
++    return True, ""
++
++
++def _error_json(message: str, error_code: str = "") -> str:
++    body: dict[str, Any] = {"error": message}
++    if error_code:
++        body["error_code"] = error_code
++    return json.dumps(body, ensure_ascii=False)
++
++
++def _active_manager(explicit: Any = None) -> Any:
++    if explicit is not None:
++        return explicit
++    from hermes_cli.plugins import get_plugin_manager
++    return get_plugin_manager()
++
++
++def _receipt_context(
++    *,
++    tool_name: str,
++    proposed_args: dict[str, Any],
++    final_args: dict[str, Any],
++    profile_id: str,
++    session_id: str,
++    run_id: str,
++    call_id: str,
++    operation_identity: str,
++    policy_ref: str,
++) -> dict[str, Any]:
++    return {
++        "tool_name": tool_name,
++        "proposed_args": proposed_args,
++        "final_args": final_args,
++        "profile_id": profile_id,
++        "session_id": session_id,
++        "run_id": run_id,
++        "call_id": call_id,
++        "operation_identity": operation_identity,
++        "policy_ref": policy_ref,
++    }
++
++
++def _make_receipt(ctx: dict[str, Any], *, phase: str, dispatched: bool, disposition: str,
++                  result: str = "", error_code: str = "", error_message: str = "",
++                  receipt_persisted: bool = False) -> dict[str, Any]:
++    return build_receipt(
++        phase=phase, call_id=ctx["call_id"], profile_id=ctx["profile_id"],
++        session_id=ctx["session_id"], run_id=ctx["run_id"], tool_name=ctx["tool_name"],
++        proposed_args=ctx["proposed_args"], final_args=ctx["final_args"],
++        dispatched=dispatched, disposition=disposition, result=result,
++        operation_identity=ctx["operation_identity"], policy_ref=ctx["policy_ref"],
++        error_code=error_code, error_message=error_message, receipt_persisted=receipt_persisted,
++    )
++
++
++@dataclass
++class CheckedScope:
++    """Admit a final payload, then record terminal receipts after the handler."""
++
++    manager: Any
++    ctx: dict[str, Any]
++    blocked: bool = False
++    message: str = ""
++    error_code: str = ""
++    admitted: bool = False
++    result_receipt: dict[str, Any] = field(default_factory=dict)
++
++    def complete(self, result: Any) -> dict[str, Any]:
++        text = result if isinstance(result, str) else json.dumps(result, ensure_ascii=False)
++        receipt = _make_receipt(
++            self.ctx, phase=PHASE_TERMINAL, dispatched=True, disposition="completed", result=text,
++        )
++        ok, err = emit_receipts(self.manager, receipt, phase=PHASE_TERMINAL)
++        if not ok:
++            receipt = _make_receipt(
++                self.ctx, phase=PHASE_TERMINAL, dispatched=True, disposition="unknown",
++                result=text, error_code="SINK_ERROR", error_message=err,
++            )
++            emit_receipts(self.manager, receipt, phase=PHASE_TERMINAL)
++        self.result_receipt = _copy_receipt(receipt)
++        return self.result_receipt
++
++    def fail(self, exc: BaseException) -> dict[str, Any]:
++        text = _error_json(str(exc), "HANDLER_ERROR")
++        receipt = _make_receipt(
++            self.ctx, phase=PHASE_TERMINAL, dispatched=True, disposition="handler_error",
++            result=text, error_code="HANDLER_ERROR", error_message=str(exc),
++        )
++        ok, err = emit_receipts(self.manager, receipt, phase=PHASE_TERMINAL)
++        if not ok:
++            receipt = _make_receipt(
++                self.ctx, phase=PHASE_TERMINAL, dispatched=True, disposition="unknown",
++                result=text, error_code="SINK_ERROR", error_message=err,
++            )
++            emit_receipts(self.manager, receipt, phase=PHASE_TERMINAL)
++        self.result_receipt = _copy_receipt(receipt)
++        return self.result_receipt
++
++
++def admit_checked_dispatch(
++    *,
++    tool_name: str,
++    proposed_args: dict[str, Any],
++    final_args: dict[str, Any],
++    manager: Any = None,
++    agent: Any = None,
++    profile_id: str = "",
++    session_id: str = "",
++    run_id: str = "",
++    tool_call_id: str = "",
++    task_id: str = "",
++    turn_id: str = "",
++    conversation_id: str = "",
++    operation_identity: str = "",
++    policy_ref: str = "",
++    plugin_id: str = "",
++) -> CheckedScope:
++    """Pure check, before_dispatch sinks, then consuming commit. Does not call the handler."""
++    manager = _active_manager(manager)
++    call_id = tool_call_id or uuid.uuid4().hex
++    proposed_args = _copy_args(proposed_args)
++    final_args = _copy_args(final_args)
++    ctx = _receipt_context(
++        tool_name=tool_name, proposed_args=proposed_args, final_args=final_args,
++        profile_id=profile_id, session_id=session_id, run_id=run_id, call_id=call_id,
++        operation_identity=operation_identity, policy_ref=policy_ref,
++    )
++    scope = CheckedScope(manager=manager, ctx=ctx)
++    auth_ctx = {
++        "session_id": session_id, "run_id": run_id, "operation_identity": operation_identity,
++        "policy_ref": policy_ref, "profile_id": profile_id, "tool_call_id": call_id,
++        "task_id": task_id, "turn_id": turn_id, "conversation_id": conversation_id,
++        "plugin_id": plugin_id, "has_agent": agent is not None,
++    }
++    check = run_authorizers(manager, tool_name, final_args, phase=PHASE_CHECK, context=auth_ctx)
++    if check.blocked:
++        scope.blocked, scope.message, scope.error_code = True, check.message, check.error_code
++        scope.result_receipt = _terminal_block(manager, ctx, check.message, check.error_code)
++        return scope
++    prepared = _make_receipt(ctx, phase=PHASE_BEFORE, dispatched=False, disposition="prepared")
++    ok, err = emit_receipts(manager, prepared, phase=PHASE_BEFORE)
++    if not ok:
++        scope.blocked, scope.message, scope.error_code = True, err, "SINK_ERROR"
++        scope.result_receipt = _terminal_block(manager, ctx, err, "SINK_ERROR")
++        return scope
++    commit = run_authorizers(manager, tool_name, final_args, phase=PHASE_COMMIT, context=auth_ctx)
++    if commit.blocked:
++        scope.blocked, scope.message, scope.error_code = True, commit.message, commit.error_code
++        scope.result_receipt = _terminal_block(manager, ctx, commit.message, commit.error_code)
++        return scope
++    scope.admitted = True
++    return scope
++
++
++def _terminal_block(manager: Any, ctx: dict[str, Any], message: str, error_code: str) -> dict[str, Any]:
++    receipt = _make_receipt(
++        ctx, phase=PHASE_TERMINAL, dispatched=False, disposition="blocked",
++        result=_error_json(message, error_code), error_code=error_code, error_message=message,
++    )
++    emit_receipts(manager, receipt, phase=PHASE_TERMINAL)
++    return _copy_receipt(receipt)
++
++
++def record_blocked_attempt(
++    *,
++    tool_name: str,
++    proposed_args: dict[str, Any],
++    final_args: dict[str, Any],
++    profile_id: str,
++    session_id: str,
++    call_id: str,
++    message: str,
++    error_code: str,
++    run_id: str = "",
++    operation_identity: str = "",
++    policy_ref: str = "",
++    manager: Any = None,
++) -> dict[str, Any]:
++    """Emit a terminal dispatched=false receipt for a declined attempt. Does not dispatch."""
++    manager = _active_manager(manager)
++    ctx = _receipt_context(
++        tool_name=tool_name, proposed_args=_copy_args(proposed_args), final_args=_copy_args(final_args),
++        profile_id=profile_id, session_id=session_id, run_id=run_id, call_id=call_id,
++        operation_identity=operation_identity, policy_ref=policy_ref,
++    )
++    return _terminal_block(manager, ctx, message, error_code)
++
++
++def resolve_checked_authority(ctx: Any, tool_name: str, *, session_id: str) -> tuple[Optional[dict[str, Any]], str]:
++    """Bind identity from command/agent ContextVar. A nonempty session string is not authority."""
++    from hermes_cli.plugin_command_session import current_bound_agent, current_bound_context
++
++    bound = current_bound_context()
++    plugin_id = str(getattr(ctx, "plugin_id", "") or "")
++    profile_id = str(getattr(ctx, "profile_name", "") or "") or _active_profile_id()
++    if bound is None:
++        return None, AUTH_CONTEXT_MISSING
++    supplied = str(session_id or "")
++    if supplied and supplied != str(bound.session_id or ""):
++        return None, AUTH_CONTEXT_MISSING
++    effective_session = str(bound.session_id or supplied)
++    if bound.kind == "agent":
++        agent = current_bound_agent()
++        if agent is None:
++            return None, AUTH_CONTEXT_MISSING
++        return {
++            "agent": agent,
++            "session_id": effective_session or str(getattr(agent, "session_id", "") or ""),
++            "profile_id": bound.profile_id or profile_id,
++            "plugin_id": plugin_id,
++        }, ""
++    if not plugin_id or not caller_owns_tool(ctx._manager, plugin_id, tool_name):
++        return None, AUTH_CONTEXT_MISSING
++    return {
++        "agent": None,
++        "session_id": effective_session,
++        "profile_id": bound.profile_id or profile_id,
++        "plugin_id": plugin_id,
++    }, ""
++
++
++
++def _missing_authority_receipt(
++    *, tool_name: str, proposed_args: dict[str, Any], profile_id: str, session_id: str,
++    run_id: str, call_id: str, operation_identity: str, policy_ref: str,
++) -> dict[str, Any]:
++    ctx = _receipt_context(
++        tool_name=tool_name, proposed_args=proposed_args, final_args=proposed_args,
++        profile_id=profile_id, session_id=session_id, run_id=run_id, call_id=call_id,
++        operation_identity=operation_identity, policy_ref=policy_ref,
++    )
++    return _make_receipt(
++        ctx, phase=PHASE_TERMINAL, dispatched=False, disposition="blocked",
++        result=_error_json("missing live agent or caller-owned adapter context", AUTH_CONTEXT_MISSING),
++        error_code=AUTH_CONTEXT_MISSING, error_message="missing live agent or caller-owned adapter context",
++    )
++
++
++def _apply_rewrites(
++    tool_name: str, proposed_args: dict[str, Any], *, session_id: str, task_id: str,
++    tool_call_id: str, turn_id: str, conversation_id: str,
++) -> tuple[dict[str, Any], Optional[str], Any]:
++    """Request middleware + pre_tool_call(execution_phase=transform).
++
++    Returns (final_args, block_msg, pending_approve). Approve is not consumed here so
++    the checked terminal can bind the displayed approval to the effective payload after
++    execution-middleware rewrites. Calls without this path keep legacy consume-at-pre-hook
++    behavior.
++    """
++    current = _copy_args(proposed_args)
++    try:
++        from hermes_cli.middleware import apply_tool_request_middleware
++        mw = apply_tool_request_middleware(
++            tool_name, current, session_id=session_id, task_id=task_id,
++            tool_call_id=tool_call_id, turn_id=turn_id, conversation_id=conversation_id,
++        )
++        if isinstance(mw.payload, dict):
++            current = mw.payload
++    except Exception:
++        pass
++    from hermes_cli.plugins import _get_pre_tool_call_directive_details, _resolve_block_from_details
++    details = _get_pre_tool_call_directive_details(
++        tool_name, current, task_id=task_id, session_id=session_id, tool_call_id=tool_call_id,
++        turn_id=turn_id, conversation_id=conversation_id, execution_phase=PHASE_TRANSFORM,
++    )
++    if isinstance(details.modified_args, dict):
++        current = details.modified_args
++    if details.action == "block":
++        block_msg = _resolve_block_from_details(
++            details, tool_name, turn_id=turn_id, tool_call_id=tool_call_id, session_id=session_id,
++        )
++        return current, block_msg, None
++    pending = details if details.action == "approve" else None
++    return current, None, pending
++
++
++
++def execute_checked(
++    ctx: Any,
++    tool_name: str,
++    proposed_args: dict,
++    *,
++    run_id: str = "",
++    operation_identity: str = "",
++    policy_ref: str = "",
++    tool_call_id: str = "",
++    session_id: str = "",
++    task_id: str = "",
++    turn_id: str = "",
++    conversation_id: str = "",
++) -> dict[str, Any]:
++    """Single public checked call. No preview. Never raw-registry fallback."""
++    manager = ctx._manager
++    proposed = _copy_args(proposed_args)
++    call_id = tool_call_id or uuid.uuid4().hex
++    profile_id = str(getattr(ctx, "profile_name", "") or "") or _active_profile_id()
++    authority, _err = resolve_checked_authority(ctx, tool_name, session_id=session_id)
++    if authority is None:
++        return _missing_authority_receipt(
++            tool_name=tool_name, proposed_args=proposed, profile_id=profile_id,
++            session_id=session_id, run_id=run_id, call_id=call_id,
++            operation_identity=operation_identity, policy_ref=policy_ref,
++        )
++    session_id = authority["session_id"]
++    profile_id = authority["profile_id"] or profile_id
++    plugin_id = authority["plugin_id"]
++    agent = authority["agent"]
++
++    current, block_msg, pending_approve = _apply_rewrites(
++        tool_name, proposed, session_id=session_id, task_id=task_id, tool_call_id=call_id,
++        turn_id=turn_id, conversation_id=conversation_id,
++    )
++    if block_msg:
++        ctx_r = _receipt_context(
++            tool_name=tool_name, proposed_args=proposed, final_args=current,
++            profile_id=profile_id, session_id=session_id, run_id=run_id, call_id=call_id,
++            operation_identity=operation_identity, policy_ref=policy_ref,
++        )
++        return _terminal_block(manager, ctx_r, block_msg, "POLICY_BLOCKED")
++
++    terminal_used = False
++    outcome: dict[str, Any] = {}
++
++    def _receipt_ctx(final_args: dict[str, Any]) -> dict[str, Any]:
++        return _receipt_context(
++            tool_name=tool_name, proposed_args=proposed, final_args=final_args,
++            profile_id=profile_id, session_id=session_id, run_id=run_id, call_id=call_id,
++            operation_identity=operation_identity, policy_ref=policy_ref,
++        )
++
++    def terminal(final_payload: Any) -> Any:
++        nonlocal terminal_used
++        if terminal_used:
++            raise RuntimeError("checked execution terminal is single-use")
++        terminal_used = True
++        final_args = _copy_args(final_payload if isinstance(final_payload, dict) else current)
++
++        if pending_approve is not None:
++            from hermes_cli.plugins import _PreToolCallDirective, _resolve_block_from_details
++            approve_details = _PreToolCallDirective(
++                action="approve",
++                message=_bind_approval_reason(pending_approve.message or "", final_args),
++                rule_key=pending_approve.rule_key,
++            )
++            approve_block = _resolve_block_from_details(
++                approve_details, tool_name, turn_id=turn_id, tool_call_id=call_id, session_id=session_id,
++            )
++            if approve_block:
++                receipt = _terminal_block(manager, _receipt_ctx(final_args), approve_block, "POLICY_BLOCKED")
++                outcome["receipt"] = receipt
++                return receipt
++
++        try:
++            from agent.tool_dispatch_helpers import _context_pruned_argument_paths
++            pruned = _context_pruned_argument_paths(tool_name, final_args)
++        except Exception:
++            pruned = []
++        if pruned:
++            receipt = _terminal_block(manager, _receipt_ctx(final_args), "pruned tool arguments", "PRUNED_ARGUMENTS")
++            outcome["receipt"] = receipt
++            return receipt
++
++        if agent is not None:
++            guardrails = getattr(agent, "_tool_guardrails", None)
++            before = getattr(guardrails, "before_call", None)
++            if callable(before):
++                decision = before(tool_name, final_args)
++                if not getattr(decision, "allows_execution", True):
++                    message = getattr(decision, "message", None) or "Tool blocked by guardrail policy"
++                    receipt = _terminal_block(manager, _receipt_ctx(final_args), message, "GUARDRAIL_BLOCKED")
++                    outcome["receipt"] = receipt
++                    return receipt
++
++        scope = admit_checked_dispatch(
++            tool_name=tool_name, proposed_args=proposed, final_args=final_args, manager=manager,
++            agent=agent, profile_id=profile_id, session_id=session_id, run_id=run_id,
++            tool_call_id=call_id, task_id=task_id, turn_id=turn_id, conversation_id=conversation_id,
++            operation_identity=operation_identity, policy_ref=policy_ref, plugin_id=plugin_id,
++        )
++        if scope.blocked:
++            outcome["receipt"] = scope.result_receipt
++            return scope.result_receipt
++
++        from tools.registry import registry
++        try:
++            result = registry.dispatch(tool_name, _copy_args(final_args), scope=manager.scope_key)
++        except Exception as exc:
++            outcome["receipt"] = scope.fail(exc)
++            return outcome["receipt"]
++        outcome["receipt"] = scope.complete(result)
++        return result
++
++    from hermes_cli.middleware import run_tool_execution_middleware
++    mw_result = run_tool_execution_middleware(
++        tool_name, current, terminal, original_args=proposed,
++        session_id=session_id, task_id=task_id, tool_call_id=call_id,
++        turn_id=turn_id, conversation_id=conversation_id,
++    )
++    if not terminal_used:
++        text = mw_result if isinstance(mw_result, str) else (
++            json.dumps(mw_result, ensure_ascii=False) if mw_result is not None else ""
++        )
++        receipt = _make_receipt(
++            _receipt_ctx(current), phase=PHASE_TERMINAL, dispatched=False, disposition="blocked",
++            result=text, error_code="EXECUTION_MIDDLEWARE_SHORT_CIRCUIT", error_message=text,
++        )
++        emit_receipts(manager, receipt, phase=PHASE_TERMINAL)
++        return _copy_receipt(receipt)
++    return outcome.get("receipt") or mw_result
+diff --git a/hermes_cli/plugin_command_dispatch.py b/hermes_cli/plugin_command_dispatch.py
+index 3356df2189..ef9882f5b1 100644
+--- a/hermes_cli/plugin_command_dispatch.py
++++ b/hermes_cli/plugin_command_dispatch.py
+@@ -5,17 +5,13 @@ from __future__ import annotations
+ import inspect
+ from typing import Any, Callable
+ 
++from hermes_cli.plugin_command_session import bind_command_context, bound_profile_id
++
+ _KEYWORD_KINDS = (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+ 
+ 
+-def invoke_plugin_command(handler: Callable, raw_args: str, **context: Any) -> Any:
+-    """Call *handler* once with *raw_args* plus the *context* keywords it declares.
+-
+-    Every surface passes the same context (``source``, ``session_id``, ``session_key``,
+-    ``platform``); a handler opts in by naming any of them as keyword-capable parameters, or
+-    takes them all with ``**kwargs``. Legacy ``fn(raw_args)`` handlers and opaque signatures keep
+-    the one-argument call. Handler exceptions propagate; they are never retried as a legacy call.
+-    """
++def _call_declared_handler(handler: Callable, raw_args: str, context: dict[str, Any]) -> Any:
++    """Call *handler* once with *raw_args* plus the *context* keywords it declares."""
+     try:
+         parameters = list(inspect.signature(handler).parameters.values())
+     except (TypeError, ValueError):
+@@ -30,3 +26,39 @@ def invoke_plugin_command(handler: Callable, raw_args: str, **context: Any) -> A
+         return handler(raw_args, **context)
+     accepted = {p.name for p in parameters if p.kind in _KEYWORD_KINDS}
+     return handler(raw_args, **{k: v for k, v in context.items() if k in accepted})
++
++
++def invoke_plugin_command(handler: Callable, raw_args: str, **context: Any) -> Any:
++    """Call *handler* once with *raw_args* plus the *context* keywords it declares.
++
++    Every surface passes the same context (``source``, ``session_id``, ``session_key``,
++    ``platform``); a handler opts in by naming any of them as keyword-capable parameters, or
++    takes them all with ``**kwargs``. Legacy ``fn(raw_args)`` handlers and opaque signatures keep
++    the one-argument call. Handler exceptions propagate; they are never retried as a legacy call.
++
++    The host also binds that session/profile identity on a ContextVar for the duration of the
++    handler (including async handlers and returned awaitables) so ``execute_checked`` can compare
++    it. Public handler signatures are unchanged.
++    """
++    bound = dict(
++        session_id=str(context.get("session_id") or ""),
++        session_key=str(context.get("session_key") or ""),
++        platform=str(context.get("platform") or ""),
++        profile_id=bound_profile_id(),
++    )
++    if inspect.iscoroutinefunction(handler):
++        async def _async_command():
++            with bind_command_context(**bound):
++                result = _call_declared_handler(handler, raw_args, context)
++                if inspect.isawaitable(result):
++                    return await result
++                return result
++        return _async_command()
++    with bind_command_context(**bound):
++        result = _call_declared_handler(handler, raw_args, context)
++    if inspect.isawaitable(result):
++        async def _await_command():
++            with bind_command_context(**bound):
++                return await result
++        return _await_command()
++    return result
+diff --git a/hermes_cli/plugin_command_session.py b/hermes_cli/plugin_command_session.py
+new file mode 100644
+index 0000000000..1b914fc81f
+--- /dev/null
++++ b/hermes_cli/plugin_command_session.py
+@@ -0,0 +1,101 @@
++"""Bound command/agent identity for checked execution.
++
++Public ``execute_checked`` signatures stay frozen. A nonempty ``session_id``
++argument is not authority. ``invoke_plugin_command`` and the live agent tool
++loop bind identity on a ContextVar that follows sync calls, asyncio tasks, and
++``contextvars.copy_context()`` executor threads. Missing or foreign identity
++fails closed with ``AUTH_CONTEXT_MISSING``.
++"""
++
++from __future__ import annotations
++
++from contextlib import contextmanager
++from contextvars import ContextVar
++from dataclasses import dataclass
++from typing import Any, Iterator, Optional
++
++
++@dataclass(frozen=True)
++class BoundExecutionContext:
++    """Host-bound identity for one command handler or live agent tool call."""
++
++    kind: str  # "command" | "agent"
++    session_id: str
++    session_key: str = ""
++    platform: str = ""
++    profile_id: str = ""
++
++
++_BOUND: ContextVar[Optional[BoundExecutionContext]] = ContextVar(
++    "hermes_checked_execution_bound", default=None,
++)
++_BOUND_AGENT: ContextVar[Any] = ContextVar(
++    "hermes_checked_execution_bound_agent", default=None,
++)
++
++
++def current_bound_context() -> Optional[BoundExecutionContext]:
++    return _BOUND.get()
++
++
++def current_bound_agent() -> Any:
++    bound = _BOUND.get()
++    if bound is None or bound.kind != "agent":
++        return None
++    return _BOUND_AGENT.get()
++
++
++def bound_profile_id() -> str:
++    try:
++        from hermes_cli.profiles import get_active_profile_name
++        return str(get_active_profile_name() or "")
++    except Exception:
++        return ""
++
++
++@contextmanager
++def bind_command_context(
++    *,
++    session_id: str = "",
++    session_key: str = "",
++    platform: str = "",
++    profile_id: str = "",
++) -> Iterator[BoundExecutionContext]:
++    """Mark the current task as a real registered command invocation."""
++    ctx = BoundExecutionContext(
++        kind="command",
++        session_id=str(session_id or ""),
++        session_key=str(session_key or ""),
++        platform=str(platform or ""),
++        profile_id=str(profile_id or ""),
++    )
++    token = _BOUND.set(ctx)
++    agent_token = _BOUND_AGENT.set(None)
++    try:
++        yield ctx
++    finally:
++        _BOUND.reset(token)
++        _BOUND_AGENT.reset(agent_token)
++
++
++@contextmanager
++def bind_agent_context(
++    agent: Any,
++    *,
++    session_id: str = "",
++    profile_id: str = "",
++) -> Iterator[BoundExecutionContext]:
++    """Mark the current task as a live agent tool-loop invocation."""
++    sid = str(session_id or getattr(agent, "session_id", "") or "")
++    ctx = BoundExecutionContext(
++        kind="agent",
++        session_id=sid,
++        profile_id=str(profile_id or ""),
++    )
++    token = _BOUND.set(ctx)
++    agent_token = _BOUND_AGENT.set(agent)
++    try:
++        yield ctx
++    finally:
++        _BOUND.reset(token)
++        _BOUND_AGENT.reset(agent_token)
+diff --git a/hermes_cli/plugin_host_child.py b/hermes_cli/plugin_host_child.py
+index ff84445e77..6debae696e 100644
+--- a/hermes_cli/plugin_host_child.py
++++ b/hermes_cli/plugin_host_child.py
+@@ -106,6 +106,9 @@ class RemotePluginContext:
+         from hermes_cli.plugin_isolation import (
+             HOST_REMOTE_FACADES, HOST_SKIPPED_CTX_METHODS, HOST_UNSUPPORTED_CTX_METHODS,
+         )
++        if name == "checked_execution_capabilities":
++            from hermes_cli.checked_execution import checked_execution_capabilities
++            return checked_execution_capabilities
+         if name in HOST_UNSUPPORTED_CTX_METHODS:
+             def unsupported(*_args: Any, **_kwargs: Any) -> Any:
+                 raise PluginHostUnsupported(
+diff --git a/hermes_cli/plugin_isolation.py b/hermes_cli/plugin_isolation.py
+index 5b1d986078..014ee8b975 100644
+--- a/hermes_cli/plugin_isolation.py
++++ b/hermes_cli/plugin_isolation.py
+@@ -47,6 +47,9 @@ HOST_UNSUPPORTED_CTX_METHODS: dict[str, str] = {
+     "register_approval_transport": "approval transports hold the live approval request/response channel",
+     "post_message": "the returned handle is bound to the gateway's event loop and live adapter",
+     "apost_message": "the returned handle is bound to the gateway's event loop and live adapter",
++    "register_tool_authorizer": "checked-execution authorizers stay in-process; host isolation is unsupported",
++    "register_execution_receipt_sink": "checked-execution receipt sinks stay in-process; host isolation is unsupported",
++    "execute_checked": "checked execution cannot cross the plugin-host process boundary",
+ }
+ 
+ # Registered in-process only; skipped (with a warning, the plugin still loads) inside the host
+diff --git a/hermes_cli/plugins.py b/hermes_cli/plugins.py
+index 3b8c742177..44ef1fdd61 100644
+--- a/hermes_cli/plugins.py
++++ b/hermes_cli/plugins.py
+@@ -294,6 +294,8 @@ class PluginManager(PluginLoaderMixin, PluginDispatchMixin, PluginLedgerMixin):
+         # Fallback hooks registered by a memory provider before general discovery.
+         self._memory_hook_registrations: dict[tuple[str, str], list[PluginRegistration]] = {}
+         self._middleware: dict[str, list[Callable]] = {}
++        self._tool_authorizers: dict[str, list[Callable]] = {}
++        self._execution_receipt_sinks: dict[str, list[Callable]] = {}
+         self._plugin_tool_names: set[str] = set()
+         self._plugin_platform_names: set[str] = set()
+         self._cli_commands: dict[str, dict] = {}
+@@ -1128,6 +1130,7 @@ def _get_pre_tool_call_directive_details(
+     tool_name: str, args: Optional[dict[str, Any]], task_id: str = "", session_id: str = "",
+     tool_call_id: str = "", turn_id: str = "", api_request_id: str = "",
+     middleware_trace: Optional[list[dict[str, Any]]] = None, conversation_id: str = "",
++    execution_phase: str = "",
+ ) -> _PreToolCallDirective:
+     """Check ``pre_tool_call`` hooks for ``{"action": "block", "message"}`` (veto; message becomes
+     the tool result) or ``{"action": "approve", "message", "rule_key"?}`` (escalate ANY tool to the
+@@ -1140,11 +1143,14 @@ def _get_pre_tool_call_directive_details(
+         fmt = getattr(_thread_tool_whitelist, "fmt", "Tool '{tool_name}' denied")
+         return _PreToolCallDirective(action="block", message=fmt.format(tool_name=tool_name))
+     from hermes_cli.lifecycle import invoke_hook as invoke_lifecycle_hook
+-    hook_results = invoke_lifecycle_hook(
+-        "pre_tool_call", tool_name=tool_name, args=args if isinstance(args, dict) else {},
++    hook_kwargs: dict[str, Any] = dict(
++        tool_name=tool_name, args=args if isinstance(args, dict) else {},
+         task_id=task_id, session_id=session_id, tool_call_id=tool_call_id, turn_id=turn_id,
+         api_request_id=api_request_id, middleware_trace=list(middleware_trace or []), conversation_id=conversation_id,
+     )
++    if execution_phase:
++        hook_kwargs["execution_phase"] = execution_phase
++    hook_results = invoke_lifecycle_hook("pre_tool_call", **hook_kwargs)
+     modified_args: Optional[dict[str, Any]] = None
+     first_approve: Optional[tuple[Optional[str], Optional[str]]] = None  # (message, rule_key)
+     for result in hook_results:
+diff --git a/hermes_cli/plugins_context.py b/hermes_cli/plugins_context.py
+index 71bacc4f92..53caa23d21 100644
+--- a/hermes_cli/plugins_context.py
++++ b/hermes_cli/plugins_context.py
+@@ -491,6 +491,48 @@ class PluginContext(PluginCapabilityCtxMixin):
+                 kwargs["parent_agent"] = agent
+         return registry.dispatch(tool_name, args, scope=self._manager.scope_key, **kwargs)
+ 
++    def checked_execution_capabilities(self) -> dict:
++        """Discover checked-execution/v1 support. Not a consent capability."""
++        from hermes_cli.checked_execution import checked_execution_capabilities as _caps
++        return _caps()
++
++    def register_tool_authorizer(self, callback: Callable) -> PluginRegistration:
++        """Register a final authorizer: ``(tool_name, tool_args, *, phase, **context)``.
++
++        Internal phases are ``check`` (pure) then ``commit`` (consume once). No modify
++        directives. Cleaned on unload/reload.
++        """
++        if not callable(callback):
++            raise TypeError("tool authorizer must be callable")
++        return self._track_callback(
++            "tool_authorizer", "v1", callback, self._manager._tool_authorizers, {"v1"},
++        )
++
++    def register_execution_receipt_sink(self, callback: Callable) -> PluginRegistration:
++        """Register a mandatory synchronous receipt sink: ``(receipt, *, phase)``.
++
++        Phases are ``before_dispatch`` and ``terminal``. Errors before the handler
++        block dispatch; errors after a possible handler yield unknown, never retry.
++        """
++        if not callable(callback):
++            raise TypeError("execution receipt sink must be callable")
++        return self._track_callback(
++            "execution_receipt_sink", "v1", callback, self._manager._execution_receipt_sinks, {"v1"},
++        )
++
++    def execute_checked(
++        self, tool_name: str, proposed_args: dict, *, run_id: str = "",
++        operation_identity: str = "", policy_ref: str = "", tool_call_id: str = "",
++        session_id: str = "", task_id: str = "", turn_id: str = "", conversation_id: str = "",
++    ) -> dict:
++        """One checked dispatch after every rewrite. Returns an ExecutionReceipt.v1 dict."""
++        from hermes_cli.checked_execution import execute_checked as _execute
++        return _execute(
++            self, tool_name, proposed_args, run_id=run_id, operation_identity=operation_identity,
++            policy_ref=policy_ref, tool_call_id=tool_call_id, session_id=session_id,
++            task_id=task_id, turn_id=turn_id, conversation_id=conversation_id,
++        )
++
+     @_serialized_replacement
+     def register_context_engine(self, engine) -> Optional[PluginRegistration]:
+         """Register the (single) ``agent.context_engine.ContextEngine`` replacing the built-in
+diff --git a/hermes_cli/plugins_ledger.py b/hermes_cli/plugins_ledger.py
+index b9c24a492f..41abaa8c8e 100644
+--- a/hermes_cli/plugins_ledger.py
++++ b/hermes_cli/plugins_ledger.py
+@@ -320,6 +320,7 @@ class PluginLedgerMixin:
+         self._persistent_carryover.extend(r for r in self._active_persistent() if id(r) not in carryover_ids)
+         for container in (
+             self._ownership_ledger, self._plugins, self._hooks, self._middleware,
++            self._tool_authorizers, self._execution_receipt_sinks,
+             self._plugin_tool_names, self._plugin_platform_names, self._cli_commands,
+             self._plugin_commands, self._plugin_skills, self._automation_blueprints, self._portable_mcp_servers,
+             self._portable_mcp_server_plugins, self._aux_tasks, self._system_prompt_sections, self._approval_transports,
+diff --git a/tests/agent/test_checked_execution_teacher.py b/tests/agent/test_checked_execution_teacher.py
+new file mode 100644
+index 0000000000..0820419046
+--- /dev/null
++++ b/tests/agent/test_checked_execution_teacher.py
+@@ -0,0 +1,242 @@
++"""Teacher agent path shares the checked final-authorization/receipt kernel."""
++
++from __future__ import annotations
++
++import copy
++import json
++from types import SimpleNamespace
++
++import pytest
++
++from hermes_cli.plugins import PluginContext, PluginManager, PluginManifest
++from tools.registry import registry
++
++
++def _require_api():
++    if not callable(getattr(PluginContext, "register_execution_receipt_sink", None)):
++        pytest.fail("missing PluginContext.register_execution_receipt_sink")
++
++
++@pytest.fixture
++def manager(monkeypatch):
++    from hermes_cli import plugins as plugins_mod
++
++    mgr = PluginManager()
++    monkeypatch.setattr(plugins_mod, "get_plugin_manager", lambda: mgr)
++    monkeypatch.setattr(plugins_mod, "_plugin_manager", mgr)
++    return mgr
++
++
++def _agent():
++    return SimpleNamespace(
++        session_id="teacher-sess",
++        _current_turn_id="turn-1",
++        _current_api_request_id="req-1",
++        _tool_guardrails=SimpleNamespace(
++            before_call=lambda _name, _args: SimpleNamespace(allows_execution=True),
++        ),
++        _turns_since_memory=0,
++        _iters_since_skill=0,
++        tool_progress_callback=None,
++        tool_start_callback=None,
++        quiet_mode=True,
++        verbose_logging=False,
++        log_prefix_chars=80,
++        _checkpoint_mgr=SimpleNamespace(enabled=False),
++        _current_tool=None,
++        _touch_activity=lambda *_a, **_k: None,
++        valid_tool_names=set(),
++    )
++
++
++def test_teacher_path_receipt_correlates_actual_call_and_final_args(manager, monkeypatch):
++    _require_api()
++    from agent import tool_executor as te
++
++    monkeypatch.setattr(te, "_begin_tool_execution", lambda *a, **k: None)
++    monkeypatch.setattr(te, "_run_with_activity_heartbeat", lambda _agent, _name, fn: fn())
++    monkeypatch.setattr("agent.terminal_approval_batch.prepare_current_terminal", lambda _ref: None)
++
++    calls = []
++    receipts = []
++
++    def handler(args, **_kw):
++        calls.append(dict(args))
++        return json.dumps({"ok": True, "n": args.get("n")})
++
++    def rewrite(tool_name, args, execution_phase=None, **_kw):
++        if args.get("n") == 3:
++            return {"action": "modify", "args": {"n": 99}}
++        return None
++
++    ctx = PluginContext(PluginManifest(name="teacher-owner", source="user"), manager)
++    name = "_teacher_checked_probe"
++    try:
++        ctx.register_tool(
++            name=name, toolset="checked_probe",
++            schema={"name": name, "description": "probe", "parameters": {"type": "object", "properties": {}}},
++            handler=handler,
++        )
++        ctx.register_hook("pre_tool_call", rewrite)
++        ctx.register_execution_receipt_sink(
++            lambda receipt, *, phase, **_k: receipts.append((phase, dict(receipt)))
++        )
++        state = te._ManagedToolResult(
++            result=None, args={"n": 3}, middleware_trace=[], blocked=False, dispatched=False,
++        )
++        result = te._dispatch_authorized_once(
++            _agent(),
++            state,
++            te._ToolCallRef(name, {"n": 3}, "task-1", "call-1", []),
++            execute=lambda args: handler(args),
++            scope_block=None,
++            display_index=None,
++            begin_execution=None,
++            authorization_gate=None,
++        )
++        assert calls == [{"n": 99}]
++        assert json.loads(result) == {"ok": True, "n": 99}
++        assert receipts, "teacher path must emit receipts"
++        terminal = [row for phase, row in receipts if phase == "terminal"]
++        assert terminal
++        assert terminal[-1]["final_args"] == {"n": 99}
++        assert terminal[-1]["proposed_args"] == {"n": 3}
++        assert terminal[-1]["tool_name"] == name
++        assert terminal[-1]["dispatched"] is True
++        assert state.dispatched is True or terminal[-1]["disposition"] == "completed"
++    finally:
++        registry.deregister(name, scope=manager.scope_key)
++
++
++def test_teacher_path_second_veto_does_not_run_handler(manager, monkeypatch):
++    _require_api()
++    from agent import tool_executor as te
++
++    monkeypatch.setattr(te, "_begin_tool_execution", lambda *a, **k: None)
++    monkeypatch.setattr(te, "_run_with_activity_heartbeat", lambda _agent, _name, fn: fn())
++    monkeypatch.setattr("agent.terminal_approval_batch.prepare_current_terminal", lambda _ref: None)
++
++    calls = []
++
++    def handler(args, **_kw):
++        calls.append(dict(args))
++        return json.dumps({"ok": True})
++
++    ctx = PluginContext(PluginManifest(name="teacher-owner", source="user"), manager)
++    name = "_teacher_veto_probe"
++    try:
++        ctx.register_tool(
++            name=name, toolset="checked_probe",
++            schema={"name": name, "description": "probe", "parameters": {"type": "object", "properties": {}}},
++            handler=handler,
++        )
++        ctx.register_tool_authorizer(
++            lambda tool_name, tool_args, *, phase, **_k: {"action": "block", "message": "teacher veto"}
++        )
++        state = te._ManagedToolResult(
++            result=None, args={"n": 1}, middleware_trace=[], blocked=False, dispatched=False,
++        )
++        result = te._dispatch_authorized_once(
++            _agent(),
++            state,
++            te._ToolCallRef(name, {"n": 1}, "task-1", "call-2", []),
++            execute=lambda args: handler(args),
++            scope_block=None,
++            display_index=None,
++            begin_execution=None,
++            authorization_gate=None,
++        )
++        assert calls == []
++        assert state.blocked is True
++        payload = json.loads(result) if isinstance(result, str) else result
++        assert payload.get("error")
++    finally:
++        registry.deregister(name, scope=manager.scope_key)
++
++
++def test_H4_teacher_receipt_has_actual_profile(manager, monkeypatch):
++    _require_api()
++    from agent import tool_executor as te
++
++    monkeypatch.setattr(te, "_begin_tool_execution", lambda *a, **k: None)
++    monkeypatch.setattr(te, "_run_with_activity_heartbeat", lambda _agent, _name, fn: fn())
++    monkeypatch.setattr("agent.terminal_approval_batch.prepare_current_terminal", lambda _ref: None)
++
++    calls = []
++    receipts = []
++    ctx = PluginContext(PluginManifest(name="teacher-owner", source="user"), manager)
++    name = "_teacher_profile_probe"
++    try:
++        ctx.register_tool(
++            name=name, toolset="checked_probe",
++            schema={"name": name, "description": "probe", "parameters": {"type": "object", "properties": {}}},
++            handler=lambda args, **_kw: calls.append(dict(args)) or json.dumps({}),
++        )
++        ctx.register_execution_receipt_sink(
++            lambda receipt, *, phase, **_k: receipts.append(copy.deepcopy(receipt))
++        )
++        state = te._ManagedToolResult(
++            result=None, args={"n": 3}, middleware_trace=[], blocked=False, dispatched=False,
++        )
++        te._dispatch_authorized_once(
++            _agent(),
++            state,
++            te._ToolCallRef(name, {"n": 3}, "task-parent", "call-parent", []),
++            execute=lambda args: registry.dispatch(name, args, scope=manager.scope_key),
++            scope_block=None,
++            display_index=None,
++            begin_execution=None,
++            authorization_gate=None,
++        )
++        terminals = [row for row in receipts if row["phase"] == "terminal"]
++        assert terminals and terminals[-1]["profile_id"] == ctx.profile_name and terminals[-1]["profile_id"], (
++            f"unbound teacher provenance: {terminals}"
++        )
++    finally:
++        registry.deregister(name, scope=manager.scope_key)
++
++
++def test_H4_teacher_veto_produces_authoritative_no_dispatch_receipt(manager, monkeypatch):
++    _require_api()
++    from agent import tool_executor as te
++
++    monkeypatch.setattr(te, "_begin_tool_execution", lambda *a, **k: None)
++    monkeypatch.setattr(te, "_run_with_activity_heartbeat", lambda _agent, _name, fn: fn())
++    monkeypatch.setattr("agent.terminal_approval_batch.prepare_current_terminal", lambda _ref: None)
++
++    calls = []
++    receipts = []
++    ctx = PluginContext(PluginManifest(name="teacher-owner", source="user"), manager)
++    name = "_teacher_blocked_probe"
++    try:
++        ctx.register_tool(
++            name=name, toolset="checked_probe",
++            schema={"name": name, "description": "probe", "parameters": {"type": "object", "properties": {}}},
++            handler=lambda args, **_kw: calls.append(dict(args)) or json.dumps({}),
++        )
++        ctx.register_hook("pre_tool_call", lambda **kw: {"action": "block", "message": "independent veto"})
++        ctx.register_execution_receipt_sink(
++            lambda receipt, *, phase, **_k: receipts.append(copy.deepcopy(receipt))
++        )
++        state = te._ManagedToolResult(
++            result=None, args={"n": 3}, middleware_trace=[], blocked=False, dispatched=False,
++        )
++        result = te._dispatch_authorized_once(
++            _agent(),
++            state,
++            te._ToolCallRef(name, {"n": 3}, "task-parent", "call-parent-denied", []),
++            execute=lambda args: registry.dispatch(name, args, scope=manager.scope_key),
++            scope_block=None,
++            display_index=None,
++            begin_execution=None,
++            authorization_gate=None,
++        )
++        terminals = [row for row in receipts if row["phase"] == "terminal"]
++        assert not calls
++        assert terminals and terminals[-1]["dispatched"] is False and terminals[-1]["call_id"] == "call-parent-denied", (
++            f"declined teaching attempt vanished: {receipts}"
++        )
++        payload = json.loads(result) if isinstance(result, str) else result
++        assert payload.get("error")
++    finally:
++        registry.deregister(name, scope=manager.scope_key)
+diff --git a/tests/hermes_cli/test_checked_execution.py b/tests/hermes_cli/test_checked_execution.py
+new file mode 100644
+index 0000000000..fd24189466
+--- /dev/null
++++ b/tests/hermes_cli/test_checked_execution.py
+@@ -0,0 +1,838 @@
++"""Checked execution host boundary: final authorizers, receipts, and execute_checked."""
++
++from __future__ import annotations
++
++import copy
++import json
++from types import SimpleNamespace
++
++import pytest
++
++from hermes_cli.plugin_command_dispatch import invoke_plugin_command
++from hermes_cli.plugin_isolation import HOST_UNSUPPORTED_CTX_METHODS
++from hermes_cli.plugins import PluginContext, PluginManager, PluginManifest
++from tools.registry import registry
++_CMD_N = 0
++
++
++_REQUIRED_CTX = (
++    "checked_execution_capabilities",
++    "register_tool_authorizer",
++    "register_execution_receipt_sink",
++    "execute_checked",
++)
++
++
++def _require_api() -> None:
++    missing = [name for name in _REQUIRED_CTX if not callable(getattr(PluginContext, name, None))]
++    if missing:
++        pytest.fail(f"missing PluginContext API: {missing}")
++
++
++@pytest.fixture
++def manager(monkeypatch):
++    from hermes_cli import plugins as plugins_mod
++
++    mgr = PluginManager()
++    monkeypatch.setattr(plugins_mod, "get_plugin_manager", lambda: mgr)
++    monkeypatch.setattr(plugins_mod, "_plugin_manager", mgr)
++    return mgr
++
++
++@pytest.fixture
++def ctx(manager):
++    _require_api()
++    return PluginContext(PluginManifest(name="adapter-owner", source="user"), manager)
++
++
++def _schema(name: str) -> dict:
++    return {
++        "name": name,
++        "description": "checked-execution probe",
++        "parameters": {"type": "object", "properties": {"n": {"type": "number"}}},
++    }
++
++
++def _register_owned(ctx: PluginContext, name: str, handler):
++    handle = ctx.register_tool(
++        name=name, toolset="checked_probe", schema=_schema(name), handler=handler,
++    )
++    assert handle is not None
++    return handle
++
++
++def _command_call(ctx, function, *, session_id="sess-1"):
++    """Positive checked calls go through a real registered command handler."""
++    global _CMD_N
++    _CMD_N += 1
++    name = f"zxce{_CMD_N}"
++
++    def handler(raw_args, **context):
++        return function(context)
++
++    handle = ctx.register_command(name, handler)
++    assert handle is not None
++    entry = ctx._manager._plugin_commands[name]
++    return invoke_plugin_command(
++        entry["handler"], "", source=None,
++        session_id=session_id, session_key=session_id, platform="cli",
++    )
++
++
++def _execute(ctx, name, args, **kwargs):
++    session_id = kwargs.pop("session_id", "sess-1")
++    run_id = kwargs.pop("run_id", "R-test")
++    extra = dict(kwargs)
++    return _command_call(
++        ctx,
++        lambda context: ctx.execute_checked(
++            name, args, session_id=context["session_id"], run_id=run_id, **extra,
++        ),
++        session_id=session_id,
++    )
++
++
++def test_capabilities_advertise_v1_and_refuse_plugin_host(ctx):
++    caps = ctx.checked_execution_capabilities()
++    assert caps["version"] == "checked-execution/v1"
++    assert caps["final_authorization"] is True
++    assert caps["mandatory_receipts"] is True
++    assert caps["bound_context"] is True
++    assert caps["plugin_host_supported"] is False
++    assert isinstance(caps.get("plugin_host_refusal"), str) and caps["plugin_host_refusal"]
++
++
++def test_host_isolation_table_refuses_mutating_checked_methods():
++    assert "register_tool_authorizer" in HOST_UNSUPPORTED_CTX_METHODS
++    assert "register_execution_receipt_sink" in HOST_UNSUPPORTED_CTX_METHODS
++    assert "execute_checked" in HOST_UNSUPPORTED_CTX_METHODS
++    assert "checked_execution_capabilities" not in HOST_UNSUPPORTED_CTX_METHODS
++
++
++def test_remote_plugin_context_fails_closed_for_checked_methods():
++    from hermes_cli.plugin_host_child import RemotePluginContext
++    from hermes_cli.plugin_host_wire import PluginHostUnsupported
++
++    remote = RemotePluginContext(None, "adapter-owner", {
++        "ctx_methods": [
++            "checked_execution_capabilities", "register_tool_authorizer",
++            "register_execution_receipt_sink", "execute_checked",
++        ],
++        "plugin_id": "adapter-owner",
++        "manifest": {"name": "adapter-owner"},
++    })
++    with pytest.raises(PluginHostUnsupported):
++        remote.register_tool_authorizer(lambda **_k: None)
++    with pytest.raises(PluginHostUnsupported):
++        remote.register_execution_receipt_sink(lambda *_a, **_k: None)
++    with pytest.raises(PluginHostUnsupported):
++        remote.execute_checked("probe", {"n": 1})
++    caps = remote.checked_execution_capabilities()
++    assert caps["plugin_host_supported"] is False
++
++
++def test_no_public_preview_api():
++    _require_api()
++    assert not hasattr(PluginContext, "preview_checked")
++    assert not hasattr(PluginContext, "execute_checked_preview")
++    assert not hasattr(PluginContext, "preview_execute_checked")
++
++
++def test_dispatch_tool_stays_raw_and_skips_authorizers(ctx, manager):
++    calls = []
++
++    def handler(args, **_kw):
++        calls.append(dict(args))
++        return json.dumps({"ok": True, "n": args.get("n")})
++
++    name = "_checked_raw_dispatch"
++    try:
++        _register_owned(ctx, name, handler)
++        blocked = []
++
++        def authorizer(tool_name, tool_args, *, phase, **_ctx):
++            blocked.append((phase, tool_args.get("n")))
++            return {"action": "block", "message": "authorizer should not see dispatch_tool"}
++
++        ctx.register_tool_authorizer(authorizer)
++        result = ctx.dispatch_tool(name, {"n": 3})
++        assert json.loads(result) == {"ok": True, "n": 3}
++        assert calls == [{"n": 3}]
++        assert blocked == []
++    finally:
++        registry.deregister(name, scope=manager.scope_key)
++
++
++def test_execute_checked_handler_sees_final_args_after_rewrite(ctx, manager):
++    calls = []
++
++    def handler(args, **_kw):
++        calls.append(dict(args))
++        return json.dumps({"ok": True, "n": args.get("n")})
++
++    def rewrite(tool_name, args, execution_phase=None, **_kw):
++        if args.get("n") == 3:
++            return {"action": "modify", "args": {"n": 99}}
++        return None
++
++    receipts = []
++    name = "_checked_final_args"
++    try:
++        _register_owned(ctx, name, handler)
++        ctx.register_hook("pre_tool_call", rewrite)
++        ctx.register_execution_receipt_sink(lambda receipt, *, phase, **_k: receipts.append((phase, receipt)))
++        receipt = _execute(ctx, name, {"n": 3})
++        assert calls == [{"n": 99}]
++        assert receipt["schema"] == "ExecutionReceipt.v1"
++        assert receipt["dispatched"] is True
++        assert receipt["disposition"] == "completed"
++        assert receipt["final_args"] == {"n": 99}
++        assert receipt["proposed_args"] == {"n": 3}
++        assert receipt["final_args"] is not receipt["proposed_args"]
++        assert json.loads(receipt["result"]) == {"ok": True, "n": 99}
++        phases = [phase for phase, _row in receipts]
++        assert phases == ["before_dispatch", "terminal"]
++        assert receipts[-1][1]["final_args"] == {"n": 99}
++        assert receipts[0][1]["dispatched"] is False
++        assert receipts[0][1]["disposition"] == "prepared"
++    finally:
++        registry.deregister(name, scope=manager.scope_key)
++
++
++def test_composition_rewrite_is_caught_at_final_args(ctx, manager):
++    """A later modify 3→99 cannot sneak past an earlier consuming gate: authorizer sees 99."""
++    calls = []
++    authorizer_seen = []
++    consumed_at_transform = []
++
++    def handler(args, **_kw):
++        calls.append(dict(args))
++        return json.dumps({"ok": True, "n": args.get("n")})
++
++    def consuming_gate(tool_name, args, execution_phase=None, **_kw):
++        if execution_phase == "transform":
++            return None
++        consumed_at_transform.append(dict(args))
++        return None
++
++    def later_modify(tool_name, args, **_kw):
++        if args.get("n") == 3:
++            return {"action": "modify", "args": {"n": 99}}
++        return None
++
++    def authorizer(tool_name, tool_args, *, phase, **_ctx):
++        authorizer_seen.append((phase, dict(tool_args)))
++        if tool_args.get("n") == 99:
++            return {"action": "block", "message": "final args escaped the gate"}
++        return None
++
++    name = "_checked_compose_3_to_99"
++    try:
++        _register_owned(ctx, name, handler)
++        ctx.register_hook("pre_tool_call", consuming_gate)
++        ctx.register_hook("pre_tool_call", later_modify)
++        ctx.register_tool_authorizer(authorizer)
++        receipt = _execute(ctx, name, {"n": 3})
++        assert calls == []
++        assert receipt["dispatched"] is False
++        assert receipt["disposition"] == "blocked"
++        assert receipt["final_args"] == {"n": 99}
++        assert ("check", {"n": 99}) in authorizer_seen
++        assert all(phase != "commit" for phase, _args in authorizer_seen)
++        assert consumed_at_transform == []
++    finally:
++        registry.deregister(name, scope=manager.scope_key)
++
++
++def test_second_authorizer_veto_does_not_invoke_handler(ctx, manager):
++    calls = []
++
++    def handler(args, **_kw):
++        calls.append(dict(args))
++        return json.dumps({"ok": True})
++
++    def allow(tool_name, tool_args, *, phase, **_ctx):
++        return None
++
++    def veto(tool_name, tool_args, *, phase, **_ctx):
++        return {"action": "block", "message": "second veto"}
++
++    name = "_checked_second_veto"
++    try:
++        _register_owned(ctx, name, handler)
++        ctx.register_tool_authorizer(allow)
++        ctx.register_tool_authorizer(veto)
++        receipt = _execute(ctx, name, {"n": 1})
++        assert calls == []
++        assert receipt["dispatched"] is False
++        assert receipt["disposition"] == "blocked"
++        assert "second veto" in (receipt.get("error_message") or receipt.get("result") or "")
++    finally:
++        registry.deregister(name, scope=manager.scope_key)
++
++
++def test_ordinary_pre_tool_veto_zero_calls(ctx, manager):
++    calls = []
++
++    def handler(args, **_kw):
++        calls.append(dict(args))
++        return json.dumps({"ok": True})
++
++    def veto(tool_name, args, **_kw):
++        return {"action": "block", "message": "policy veto"}
++
++    name = "_checked_policy_veto"
++    try:
++        _register_owned(ctx, name, handler)
++        ctx.register_hook("pre_tool_call", veto)
++        receipt = _execute(ctx, name, {"n": 1})
++        assert calls == []
++        assert receipt["dispatched"] is False
++        assert receipt["disposition"] == "blocked"
++    finally:
++        registry.deregister(name, scope=manager.scope_key)
++
++
++def test_approval_deny_zero_calls(ctx, manager, monkeypatch):
++    calls = []
++
++    def handler(args, **_kw):
++        calls.append(dict(args))
++        return json.dumps({"ok": True})
++
++    def approve(tool_name, args, **_kw):
++        return {"action": "approve", "message": "need human"}
++
++    monkeypatch.setattr(
++        "tools.approval.request_tool_approval",
++        lambda *a, **k: {"approved": False, "message": "denied"},
++    )
++    name = "_checked_approval_deny"
++    try:
++        _register_owned(ctx, name, handler)
++        ctx.register_hook("pre_tool_call", approve)
++        receipt = _execute(ctx, name, {"n": 1})
++        assert calls == []
++        assert receipt["dispatched"] is False
++        assert receipt["disposition"] == "blocked"
++    finally:
++        registry.deregister(name, scope=manager.scope_key)
++
++
++def test_before_dispatch_sink_failure_zero_calls(ctx, manager):
++    calls = []
++    commits = []
++
++    def handler(args, **_kw):
++        calls.append(dict(args))
++        return json.dumps({"ok": True})
++
++    def authorizer(tool_name, tool_args, *, phase, **_ctx):
++        commits.append(phase)
++        return None
++
++    def sink(receipt, *, phase, **_k):
++        if phase == "before_dispatch":
++            raise RuntimeError("cannot persist prepared receipt")
++
++    name = "_checked_sink_before"
++    try:
++        _register_owned(ctx, name, handler)
++        ctx.register_tool_authorizer(authorizer)
++        ctx.register_execution_receipt_sink(sink)
++        receipt = _execute(ctx, name, {"n": 1})
++        assert calls == []
++        assert "commit" not in commits
++        assert receipt["dispatched"] is False
++        assert receipt["disposition"] == "blocked"
++    finally:
++        registry.deregister(name, scope=manager.scope_key)
++
++
++def test_terminal_sink_failure_after_handler_is_unknown_never_retry(ctx, manager):
++    calls = []
++
++    def handler(args, **_kw):
++        calls.append(dict(args))
++        return json.dumps({"ok": True, "n": args.get("n")})
++
++    def sink(receipt, *, phase, **_k):
++        if phase == "terminal":
++            raise RuntimeError("lost terminal receipt")
++
++    name = "_checked_sink_terminal"
++    try:
++        _register_owned(ctx, name, handler)
++        ctx.register_execution_receipt_sink(sink)
++        receipt = _execute(ctx, name, {"n": 7})
++        assert calls == [{"n": 7}]
++        assert receipt["dispatched"] is True
++        assert receipt["disposition"] == "unknown"
++        again = _execute(ctx, name, {"n": 7}, tool_call_id="call-b")
++        assert len(calls) == 2
++        assert again["dispatched"] is True
++    finally:
++        registry.deregister(name, scope=manager.scope_key)
++
++
++def test_authorizer_check_is_pure_commit_consumes_once(ctx, manager):
++    calls = []
++    phases = []
++    consumed = {"n": 0}
++
++    def handler(args, **_kw):
++        calls.append(dict(args))
++        return json.dumps({"ok": True})
++
++    def authorizer(tool_name, tool_args, *, phase, **_ctx):
++        phases.append(phase)
++        if phase == "check":
++            return None
++        if phase == "commit":
++            consumed["n"] += 1
++            return None
++        return {"action": "block", "message": f"unexpected phase {phase}"}
++
++    name = "_checked_lifecycle"
++    try:
++        _register_owned(ctx, name, handler)
++        ctx.register_tool_authorizer(authorizer)
++        receipt = _execute(ctx, name, {"n": 1})
++        assert receipt["dispatched"] is True
++        assert phases == ["check", "commit"]
++        assert consumed["n"] == 1
++        assert calls == [{"n": 1}]
++    finally:
++        registry.deregister(name, scope=manager.scope_key)
++
++
++def test_authorizer_cannot_modify_payload(ctx, manager):
++    calls = []
++
++    def handler(args, **_kw):
++        calls.append(dict(args))
++        return json.dumps({"ok": True, "n": args.get("n")})
++
++    def authorizer(tool_name, tool_args, *, phase, **_ctx):
++        return {"action": "modify", "args": {"n": 99}}
++
++    name = "_checked_no_modify"
++    try:
++        _register_owned(ctx, name, handler)
++        ctx.register_tool_authorizer(authorizer)
++        receipt = _execute(ctx, name, {"n": 3})
++        assert calls == [{"n": 3}]
++        assert receipt["final_args"] == {"n": 3}
++    finally:
++        registry.deregister(name, scope=manager.scope_key)
++
++
++def test_old_pre_hook_without_phase_still_runs(ctx, manager):
++    seen = []
++
++    def handler(args, **_kw):
++        return json.dumps({"ok": True})
++
++    def legacy(tool_name, args):
++        seen.append((tool_name, dict(args)))
++        return None
++
++    name = "_checked_legacy_hook"
++    try:
++        _register_owned(ctx, name, handler)
++        ctx.register_hook("pre_tool_call", legacy)
++        receipt = _execute(ctx, name, {"n": 4})
++        assert seen == [(name, {"n": 4})]
++        assert receipt["dispatched"] is True
++    finally:
++        registry.deregister(name, scope=manager.scope_key)
++
++
++def test_transform_phase_is_passed_to_kwargs_hooks(ctx, manager):
++    phases = []
++
++    def handler(args, **_kw):
++        return json.dumps({"ok": True})
++
++    def hook(tool_name, args, **kwargs):
++        phases.append(kwargs.get("execution_phase"))
++        return None
++
++    name = "_checked_phase_kw"
++    try:
++        _register_owned(ctx, name, handler)
++        ctx.register_hook("pre_tool_call", hook)
++        _execute(ctx, name, {"n": 1})
++        assert "transform" in phases
++    finally:
++        registry.deregister(name, scope=manager.scope_key)
++
++
++def test_foreign_tool_without_agent_is_auth_context_missing(ctx, manager):
++    calls = []
++
++    def handler(args, **_kw):
++        calls.append(dict(args))
++        return json.dumps({"ok": True})
++
++    name = "_checked_foreign_core"
++    try:
++        registry.register(
++            name=name, toolset="debugging", schema=_schema(name),
++            handler=handler,
++        )
++        receipt = _execute(ctx, name, {"n": 1})
++        assert calls == []
++        assert receipt["dispatched"] is False
++        assert receipt["error_code"] == "AUTH_CONTEXT_MISSING"
++        assert receipt["disposition"] == "blocked"
++    finally:
++        registry.deregister(name)
++
++
++def test_caller_owned_without_session_is_auth_context_missing(ctx, manager):
++    calls = []
++
++    def handler(args, **_kw):
++        calls.append(dict(args))
++        return json.dumps({"ok": True})
++
++    name = "_checked_no_session"
++    try:
++        _register_owned(ctx, name, handler)
++        receipt = ctx.execute_checked(name, {"n": 1}, session_id="")
++        assert calls == []
++        assert receipt["error_code"] == "AUTH_CONTEXT_MISSING"
++        assert receipt["dispatched"] is False
++    finally:
++        registry.deregister(name, scope=manager.scope_key)
++
++
++def test_does_not_trust_caller_supplied_approval_boolean(ctx, manager):
++    calls = []
++
++    def handler(args, **_kw):
++        calls.append(dict(args))
++        return json.dumps({"ok": True})
++
++    name = "_checked_forged_approval"
++    try:
++        registry.register(name=name, toolset="debugging", schema=_schema(name), handler=handler)
++        receipt = _execute(ctx, name, {"n": 1, "approved": True, "actor": "root"})
++        assert calls == []
++        assert receipt["error_code"] == "AUTH_CONTEXT_MISSING"
++    finally:
++        registry.deregister(name)
++
++
++def test_authorizer_error_fails_closed(ctx, manager):
++    calls = []
++
++    def handler(args, **_kw):
++        calls.append(dict(args))
++        return json.dumps({"ok": True})
++
++    def boom(tool_name, tool_args, *, phase, **_ctx):
++        raise RuntimeError("authorizer exploded")
++
++    name = "_checked_authorizer_error"
++    try:
++        _register_owned(ctx, name, handler)
++        ctx.register_tool_authorizer(boom)
++        receipt = _execute(ctx, name, {"n": 1})
++        assert calls == []
++        assert receipt["dispatched"] is False
++        assert receipt["disposition"] == "blocked"
++    finally:
++        registry.deregister(name, scope=manager.scope_key)
++
++
++def test_unload_cleans_authorizers_and_sinks(ctx, manager):
++    calls = []
++    sinks = []
++
++    def handler(args, **_kw):
++        calls.append(dict(args))
++        return json.dumps({"ok": True})
++
++    def authorizer(tool_name, tool_args, *, phase, **_ctx):
++        return {"action": "block", "message": "still registered"}
++
++    def sink(receipt, *, phase, **_k):
++        sinks.append(phase)
++
++    name = "_checked_unload"
++    try:
++        _register_owned(ctx, name, handler)
++        ctx.register_tool_authorizer(authorizer)
++        ctx.register_execution_receipt_sink(sink)
++        blocked = _execute(ctx, name, {"n": 1})
++        assert blocked["disposition"] == "blocked"
++        assert calls == []
++        assert sinks == ["terminal"]
++        sinks.clear()
++        manager.unload()
++        other = PluginContext(PluginManifest(name="adapter-owner", source="user"), manager)
++        _register_owned(other, name, handler)
++        receipt = _execute(other, name, {"n": 1})
++        assert receipt["dispatched"] is True
++        assert calls == [{"n": 1}]
++        assert sinks == []
++    finally:
++        registry.deregister(name, scope=manager.scope_key)
++
++
++def test_pre_guards_invoked_once(ctx, manager):
++    hook_n = []
++    auth_n = []
++
++    def handler(args, **_kw):
++        return json.dumps({"ok": True})
++
++    def hook(tool_name, args, **_kw):
++        hook_n.append(args.get("n"))
++        return None
++
++    def authorizer(tool_name, tool_args, *, phase, **_ctx):
++        auth_n.append(phase)
++        return None
++
++    name = "_checked_once"
++    try:
++        _register_owned(ctx, name, handler)
++        ctx.register_hook("pre_tool_call", hook)
++        ctx.register_tool_authorizer(authorizer)
++        _execute(ctx, name, {"n": 2})
++        assert hook_n == [2]
++        assert auth_n == ["check", "commit"]
++    finally:
++        registry.deregister(name, scope=manager.scope_key)
++
++
++def test_H1_execution_middleware_veto_is_preserved(ctx, manager):
++    handler_calls = []
++    middleware_calls = []
++
++    def handler(args, **_kw):
++        handler_calls.append(dict(args))
++        return json.dumps({"ok": True})
++
++    def veto(next_call, **kw):
++        middleware_calls.append(kw["tool_name"])
++        return json.dumps({"error": "independent middleware veto"})
++
++    name = "_checked_mw_veto"
++    try:
++        _register_owned(ctx, name, handler)
++        ctx.register_middleware("tool_execution", veto)
++        receipt = _execute(ctx, name, {"n": 3})
++        assert middleware_calls == [name], f"execution middleware skipped; handler={handler_calls}, receipt={receipt}"
++        assert handler_calls == [], f"vetoed handler ran: {handler_calls}"
++        assert receipt["dispatched"] is False
++        assert receipt["disposition"] != "completed"
++    finally:
++        registry.deregister(name, scope=manager.scope_key)
++
++
++def test_H1_execution_middleware_rewrite_precedes_final_guard(ctx, manager):
++    calls = []
++    seen = []
++
++    def handler(args, **_kw):
++        calls.append(dict(args))
++        return json.dumps({})
++
++    def rewrite(next_call, args, **_kw):
++        return next_call({**args, "n": 99})
++
++    def guard(tool_name, tool_args, *, phase, **_kw):
++        seen.append((phase, tool_args["n"]))
++        if tool_args["n"] != 3:
++            return {"action": "block", "message": "n99 not authorized"}
++
++    name = "_checked_mw_rewrite"
++    try:
++        _register_owned(ctx, name, handler)
++        ctx.register_middleware("tool_execution", rewrite)
++        ctx.register_tool_authorizer(guard)
++        receipt = _execute(ctx, name, {"n": 3})
++        assert calls == [] and ("check", 99) in seen, (
++            f"final guard missed execution rewrite: calls={calls}, seen={seen}, receipt={receipt}"
++        )
++        assert receipt["dispatched"] is False
++    finally:
++        registry.deregister(name, scope=manager.scope_key)
++
++
++def test_H2_approval_never_authorizes_a_payload_it_did_not_show(ctx, manager, monkeypatch):
++    calls = []
++    approvals = []
++
++    def handler(args, **_kw):
++        calls.append(dict(args))
++        return json.dumps({})
++
++    def approve(tool_name, message, **kw):
++        approvals.append({"message": message, "metadata": kw})
++        return {"approved": True}
++
++    monkeypatch.setattr("tools.approval.request_tool_approval", approve)
++    name = "_checked_approval_payload"
++    try:
++        _register_owned(ctx, name, handler)
++        ctx.register_hook("pre_tool_call", lambda tool_name, args, **kw: {"action": "approve", "message": f"Allow exact n={args['n']}"})
++        ctx.register_hook("pre_tool_call", lambda tool_name, args, **kw: {"action": "modify", "args": {"n": 99}})
++        receipt = _execute(ctx, name, {"n": 3})
++        displayed = json.dumps(approvals)
++        assert not calls or "99" in displayed, (
++            f"approved old payload but dispatched another: approvals={approvals}, calls={calls}, receipt={receipt}"
++        )
++    finally:
++        registry.deregister(name, scope=manager.scope_key)
++
++
++def test_H2_matching_approval_still_dispatches(ctx, manager, monkeypatch):
++    calls = []
++    approvals = []
++
++    def handler(args, **_kw):
++        calls.append(dict(args))
++        return json.dumps({"ok": True})
++
++    monkeypatch.setattr(
++        "tools.approval.request_tool_approval",
++        lambda tool_name, message, **kw: approvals.append(message) or {"approved": True},
++    )
++    name = "_checked_approval_ok"
++    try:
++        _register_owned(ctx, name, handler)
++        ctx.register_hook("pre_tool_call", lambda tool_name, args, **kw: {"action": "approve", "message": f"Allow exact n={args['n']}"})
++        receipt = _execute(ctx, name, {"n": 3})
++        assert calls == [{"n": 3}]
++        assert receipt["dispatched"] is True
++        assert approvals
++    finally:
++        registry.deregister(name, scope=manager.scope_key)
++
++
++def test_H3_naked_session_label_is_not_bound_command_authority(ctx, manager):
++    calls = []
++
++    def handler(args, **_kw):
++        calls.append(dict(args))
++        return json.dumps({})
++
++    name = "_checked_unbound_context"
++    try:
++        _register_owned(ctx, name, handler)
++        receipt = ctx.execute_checked(name, {"n": 3}, session_id="forged-session")
++        assert not calls and receipt.get("error_code") == "AUTH_CONTEXT_MISSING", (
++            f"unbound caller label admitted: calls={calls}, receipt={receipt}"
++        )
++    finally:
++        registry.deregister(name, scope=manager.scope_key)
++
++
++def test_H3_bound_command_cannot_substitute_session_label(ctx, manager):
++    calls = []
++
++    def handler(args, **_kw):
++        calls.append(dict(args))
++        return json.dumps({})
++
++    name = "_checked_foreign_session"
++    try:
++        _register_owned(ctx, name, handler)
++        receipt = _command_call(
++            ctx,
++            lambda command_context: ctx.execute_checked(name, {"n": 3}, session_id="other-session"),
++        )
++        assert not calls and receipt.get("error_code") == "AUTH_CONTEXT_MISSING", (
++            f"foreign session label admitted: calls={calls}, receipt={receipt}"
++        )
++    finally:
++        registry.deregister(name, scope=manager.scope_key)
++
++
++def test_H3_cli_ref_agent_object_is_not_bound_authority(ctx, manager):
++    calls = []
++
++    def handler(args, **_kw):
++        calls.append(dict(args))
++        return json.dumps({})
++
++    name = "_checked_dummy_agent"
++    try:
++        _register_owned(ctx, name, handler)
++        manager._cli_ref = SimpleNamespace(
++            agent=SimpleNamespace(
++                _tool_guardrails=SimpleNamespace(
++                    before_call=lambda _n, _a: SimpleNamespace(allows_execution=True),
++                ),
++            ),
++        )
++        receipt = ctx.execute_checked(name, {"n": 3}, session_id="forged-session")
++        assert not calls and receipt.get("error_code") == "AUTH_CONTEXT_MISSING", (
++            f"dummy _cli_ref.agent admitted: calls={calls}, receipt={receipt}"
++        )
++    finally:
++        manager._cli_ref = None
++        registry.deregister(name, scope=manager.scope_key)
++
++
++def test_H5_authorizer_views_cannot_rewrite_what_later_guards_see(ctx, manager):
++    calls = []
++    checked_values = []
++
++    def handler(args, **_kw):
++        calls.append(dict(args))
++        return json.dumps({})
++
++    def mutates_view(tool_name, tool_args, **_kw):
++        tool_args["n"] = 99
++
++    def permits_only_99(tool_name, tool_args, *, phase, **_kw):
++        checked_values.append(tool_args["n"])
++        if tool_args["n"] != 99:
++            return {"action": "block", "message": "only99 authorized"}
++
++    name = "_checked_guard_view"
++    try:
++        _register_owned(ctx, name, handler)
++        ctx.register_tool_authorizer(mutates_view)
++        ctx.register_tool_authorizer(permits_only_99)
++        receipt = _execute(ctx, name, {"n": 3})
++        assert not calls, f"guard saw {checked_values}, real handler got {calls}; receipt={receipt}"
++        assert receipt["dispatched"] is False
++    finally:
++        registry.deregister(name, scope=manager.scope_key)
++
++
++def test_H5_sink_views_cannot_corrupt_later_authoritative_receipts(ctx, manager):
++    actual = []
++    observed = []
++
++    def handler(args, **_kw):
++        actual.append(dict(args))
++        return json.dumps({})
++
++    def mutator(receipt, *, phase, **_kw):
++        receipt["final_args"]["n"] = 99
++
++    def recorder(receipt, *, phase, **_kw):
++        observed.append(copy.deepcopy(receipt))
++
++    name = "_checked_sink_view"
++    try:
++        _register_owned(ctx, name, handler)
++        ctx.register_execution_receipt_sink(mutator)
++        ctx.register_execution_receipt_sink(recorder)
++        receipt = _execute(ctx, name, {"n": 3})
++        terminals = [row for row in observed if row["phase"] == "terminal"]
++        assert actual == [{"n": 3}]
++        assert terminals and terminals[-1]["final_args"] == actual[-1], (
++            f"receipt changed between sinks: {terminals}, actual={actual}, returned={receipt}"
++        )
++        assert receipt["final_args"] == {"n": 3}
++    finally:
++        registry.deregister(name, scope=manager.scope_key)
+diff --git a/tests/hermes_cli/test_plugin_checked_scope_controls.py b/tests/hermes_cli/test_plugin_checked_scope_controls.py
+new file mode 100644
+index 0000000000..1d07055b47
+--- /dev/null
++++ b/tests/hermes_cli/test_plugin_checked_scope_controls.py
+@@ -0,0 +1,173 @@
++"""Independent host negative controls. Synthetic handlers, no model/network."""
++import copy
++import importlib.util
++import json
++from pathlib import Path
++import sys
++
++import pytest
++
++HOST = Path(__file__).resolve().parents[2]
++sys.path.insert(0,str(HOST))
++from hermes_cli import plugins
++from hermes_cli.plugins import PluginContext, PluginManager, PluginManifest
++from tools.registry import registry
++
++@pytest.fixture
++def context(monkeypatch):
++    manager=PluginManager()
++    monkeypatch.setattr(plugins,'get_plugin_manager',lambda:manager)
++    monkeypatch.setattr(plugins,'_plugin_manager',manager)
++    ctx=PluginContext(PluginManifest(name='parent-owner',source='user'),manager)
++    handles=[]
++    def tool(name,handler):
++        ctx.register_tool(name=name,toolset='parent_probe',schema={'name':name,'description':'synthetic boundary probe',
++            'parameters':{'type':'object','properties':{'n':{'type':'number'}}}},handler=handler)
++        handles.append(name)
++        return name
++    yield ctx,manager,tool
++    for name in handles:registry.deregister(name,scope=manager.scope_key)
++
++
++def command_call(ctx, function, *, session_id='parent-session'):
++    from hermes_cli.plugin_command_dispatch import invoke_plugin_command
++    def handler(raw_args, **context):
++        return function(context)
++    ctx.register_command('parent-check', handler)
++    entry = ctx._manager._plugin_commands['parent-check']
++    return invoke_plugin_command(entry['handler'], '', source=None,
++        session_id=session_id, session_key=session_id, platform='cli')
++
++
++def checked(ctx,name,args):
++    return command_call(ctx, lambda context: ctx.execute_checked(name,args,
++        session_id=context['session_id'],run_id='R-parent'))
++
++
++def test_H1_execution_middleware_veto_is_preserved(context):
++    ctx,manager,tool=context
++    handler_calls=[];middleware_calls=[]
++    name=tool('_parent_mw_veto',lambda args,**kw: handler_calls.append(dict(args)) or json.dumps({'ok':True}))
++    def veto(next_call,**kw):
++        middleware_calls.append(kw['tool_name'])
++        return json.dumps({'error':'independent middleware veto'})
++    ctx.register_middleware('tool_execution',veto)
++    receipt=checked(ctx,name,{'n':3})
++    assert middleware_calls==[name],f'execution middleware skipped; handler={handler_calls}, receipt={receipt}'
++    assert handler_calls==[],f'vetoed handler ran: {handler_calls}'
++
++
++def test_H1_execution_middleware_rewrite_precedes_final_guard(context):
++    ctx,manager,tool=context
++    calls=[];seen=[]
++    name=tool('_parent_mw_rewrite',lambda args,**kw: calls.append(dict(args)) or '{}')
++    def rewrite(next_call,args,**kw):
++        return next_call({**args,'n':99})
++    def guard(tool_name,tool_args,*,phase,**kw):
++        seen.append((phase,tool_args['n']))
++        if tool_args['n']!=3:return {'action':'block','message':'n99 not authorized'}
++    ctx.register_middleware('tool_execution',rewrite)
++    ctx.register_tool_authorizer(guard)
++    receipt=checked(ctx,name,{'n':3})
++    assert calls==[] and ('check',99) in seen,f'final guard missed execution rewrite: calls={calls}, seen={seen}, receipt={receipt}'
++
++
++def test_H2_approval_never_authorizes_a_payload_it_did_not_show(context,monkeypatch):
++    ctx,manager,tool=context
++    calls=[];approvals=[]
++    name=tool('_parent_approval_payload',lambda args,**kw: calls.append(dict(args)) or '{}')
++    ctx.register_hook('pre_tool_call',lambda tool_name,args,**kw:{'action':'approve','message':f'Allow exact n={args["n"]}'})
++    ctx.register_hook('pre_tool_call',lambda tool_name,args,**kw:{'action':'modify','args':{'n':99}})
++    def approve(tool_name,message,**kw):
++        approvals.append({'message':message,'metadata':kw})
++        return {'approved':True}
++    monkeypatch.setattr('tools.approval.request_tool_approval',approve)
++    receipt=checked(ctx,name,{'n':3})
++    displayed=json.dumps(approvals)
++    assert not calls or '99' in displayed,f'approved old payload but dispatched another: approvals={approvals}, calls={calls}, receipt={receipt}'
++
++
++def test_H3_naked_session_label_is_not_bound_command_authority(context):
++    ctx,manager,tool=context
++    calls=[]
++    name=tool('_parent_unbound_context',lambda args,**kw: calls.append(dict(args)) or '{}')
++    # No invoke_plugin_command/live-source/agent context is bound here.
++    receipt=ctx.execute_checked(name,{'n':3},session_id='forged-session')
++    assert not calls and receipt.get('error_code')=='AUTH_CONTEXT_MISSING',f'unbound caller label admitted: calls={calls}, receipt={receipt}'
++
++
++def test_H3_bound_command_cannot_substitute_session_label(context):
++    ctx,manager,tool=context
++    calls=[]
++    name=tool('_parent_foreign_session',lambda args,**kw:calls.append(dict(args)) or '{}')
++    receipt=command_call(ctx,lambda command_context:ctx.execute_checked(name,{'n':3},session_id='other-session'))
++    assert not calls and receipt.get('error_code')=='AUTH_CONTEXT_MISSING',f'foreign session label admitted: calls={calls}, receipt={receipt}'
++
++
++def _teacher_helpers(monkeypatch):
++    p=HOST/'tests/agent/test_checked_execution_teacher.py'
++    spec=importlib.util.spec_from_file_location('parent_teacher_helpers',p)
++    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
++    from agent import tool_executor as te
++    monkeypatch.setattr(te,'_begin_tool_execution',lambda *a,**kw:None)
++    monkeypatch.setattr(te,'_run_with_activity_heartbeat',lambda a,n,fn:fn())
++    monkeypatch.setattr('agent.terminal_approval_batch.prepare_current_terminal',lambda ref:None)
++    return te,module._agent()
++
++
++def test_H4_teacher_receipt_has_actual_profile(context,monkeypatch):
++    ctx,manager,tool=context
++    te,agent=_teacher_helpers(monkeypatch)
++    calls=[];receipts=[]
++    name=tool('_parent_teacher_profile',lambda args,**kw:calls.append(dict(args)) or '{}')
++    ctx.register_execution_receipt_sink(lambda receipt,*,phase,**kw:receipts.append(copy.deepcopy(receipt)))
++    state=te._ManagedToolResult(result=None,args={'n':3},middleware_trace=[],blocked=False,dispatched=False)
++    te._dispatch_authorized_once(agent,state,te._ToolCallRef(name,{'n':3},'task-parent','call-parent',[]),
++        execute=lambda args:registry.dispatch(name,args,scope=manager.scope_key),scope_block=None,display_index=None,
++        begin_execution=None,authorization_gate=None)
++    terminals=[x for x in receipts if x['phase']=='terminal']
++    assert terminals and terminals[-1]['profile_id']==ctx.profile_name and terminals[-1]['profile_id'],f'unbound teacher provenance: {terminals}'
++
++
++def test_H4_teacher_veto_produces_authoritative_no_dispatch_receipt(context,monkeypatch):
++    ctx,manager,tool=context
++    te,agent=_teacher_helpers(monkeypatch)
++    calls=[];receipts=[]
++    name=tool('_parent_teacher_blocked',lambda args,**kw:calls.append(dict(args)) or '{}')
++    ctx.register_hook('pre_tool_call',lambda **kw:{'action':'block','message':'independent veto'})
++    ctx.register_execution_receipt_sink(lambda receipt,*,phase,**kw:receipts.append(copy.deepcopy(receipt)))
++    state=te._ManagedToolResult(result=None,args={'n':3},middleware_trace=[],blocked=False,dispatched=False)
++    te._dispatch_authorized_once(agent,state,te._ToolCallRef(name,{'n':3},'task-parent','call-parent-denied',[]),
++        execute=lambda args:registry.dispatch(name,args,scope=manager.scope_key),scope_block=None,display_index=None,
++        begin_execution=None,authorization_gate=None)
++    terminals=[x for x in receipts if x['phase']=='terminal']
++    assert not calls
++    assert terminals and terminals[-1]['dispatched'] is False and terminals[-1]['call_id']=='call-parent-denied',f'declined teaching attempt vanished: {receipts}'
++
++
++def test_H5_authorizer_views_cannot_rewrite_what_later_guards_see(context):
++    ctx,manager,tool=context
++    calls=[];checked_values=[]
++    name=tool('_parent_guard_view',lambda args,**kw:calls.append(dict(args)) or '{}')
++    def mutates_view(tool_name,tool_args,**kw):tool_args['n']=99
++    def permits_only_99(tool_name,tool_args,*,phase,**kw):
++        checked_values.append(tool_args['n'])
++        if tool_args['n']!=99:return {'action':'block','message':'only99 authorized'}
++    ctx.register_tool_authorizer(mutates_view)
++    ctx.register_tool_authorizer(permits_only_99)
++    receipt=checked(ctx,name,{'n':3})
++    assert not calls,f'guard saw {checked_values}, real handler got {calls}; receipt={receipt}'
++
++
++def test_H5_sink_views_cannot_corrupt_later_authoritative_receipts(context):
++    ctx,manager,tool=context
++    actual=[];observed=[]
++    name=tool('_parent_sink_view',lambda args,**kw:actual.append(dict(args)) or '{}')
++    def mutator(receipt,*,phase,**kw):receipt['final_args']['n']=99
++    def recorder(receipt,*,phase,**kw):observed.append(copy.deepcopy(receipt))
++    ctx.register_execution_receipt_sink(mutator)
++    ctx.register_execution_receipt_sink(recorder)
++    receipt=checked(ctx,name,{'n':3})
++    terminals=[x for x in observed if x['phase']=='terminal']
++    assert actual==[{'n':3}]
++    assert terminals and terminals[-1]['final_args']==actual[-1],f'receipt changed between sinks: {terminals}, actual={actual}, returned={receipt}'
+diff --git a/website/docs/developer-guide/plugins/index.md b/website/docs/developer-guide/plugins/index.md
+index c8445443a6..1f3ecdaf0e 100644
+--- a/website/docs/developer-guide/plugins/index.md
++++ b/website/docs/developer-guide/plugins/index.md
+@@ -1601,7 +1601,7 @@ Every name in `hermes_cli.plugins.VALID_HOOKS` has at least one core fire site.
+ 
+ | Hook | Fired by |
+ |------|----------|
+-| `pre_tool_call` | `hermes_cli/plugins.py` `_dispatch_pre_tool_call_hooks`, called from `agent/tool_executor.py` `_pre_tool_block`, `agent/agent_runtime_helpers.py` `_pre_tool_block_message` and `model_tools.py` `_pre_dispatch_guards` |
++| `pre_tool_call` | `hermes_cli/plugins.py` `_dispatch_pre_tool_call_hooks`, called from `agent/tool_executor.py` `_pre_tool_block` (checked path passes `execution_phase='transform'`), `agent/agent_runtime_helpers.py` `_pre_tool_block_message`, `model_tools.py` `_pre_dispatch_guards`, and `hermes_cli/checked_execution.py` `execute_checked` |
+ | `post_tool_call` | `model_tools.py` `_emit_post_tool_call_hook` |
+ | `transform_terminal_output` | `tools/terminal_tool_result.py` `_apply_output_transform_hook` |
+ | `transform_tool_result` | `model_tools.py` `_apply_transform_tool_result_hook` |
+@@ -2018,6 +2018,32 @@ def register(ctx):
+ 
+ This is the public, stable interface for tool dispatch from plugin commands. Plugins should not reach into `ctx._cli_ref.agent` or similar private state.
+ 
++### Checked execution {#checked-execution}
++
++`ctx.dispatch_tool` is the raw registry path: it does **not** run plugin pre-hooks, final authorizers, or receipt sinks. Runners that must check the **final** handler payload use `ctx.execute_checked` instead.
++
++Discover support first:
++
++```python
++caps = ctx.checked_execution_capabilities()
++# caps["version"] == "checked-execution/v1"
++# caps["plugin_host_supported"] is False in this release (in-process only)
++```
++
++**Registrars** (cleaned on unload/reload):
++
++- `ctx.register_tool_authorizer(callback)` — `callback(tool_name, tool_args, *, phase, **context)`. Internal phases: `check` (pure, non-consuming) then `commit` (recheck and consume once). All checks and ordinary approvals complete before any commit. No modify directives. Errors and timeouts fail closed.
++- `ctx.register_execution_receipt_sink(callback)` — `callback(receipt, *, phase)` with `phase` `before_dispatch` or `terminal`. A sink may return immediately when the call is out of scope. Interested sinks must persist before returning. A before-dispatch failure means zero handler calls; a terminal failure after a possible handler is `unknown`, never retry.
++
++**`ctx.execute_checked(tool_name, proposed_args, *, session_id='', run_id='', ...)`** returns an `ExecutionReceipt.v1` dict. Public signatures stay frozen: the host binds profile/plugin/session itself; do not supply actor or approval booleans. A nonempty `session_id` argument is **not** authority. Identity is bound on a ContextVar by `invoke_plugin_command` (`hermes_cli/plugin_command_session.py`) and by the live agent tool loop, and follows sync handlers, async handlers, and `copy_context()` executor work. A missing or foreign session label fails closed with `AUTH_CONTEXT_MISSING`. An arbitrary `_cli_ref.agent` object is not a live agent. Without a live agent, only caller-owned registered adapters under that bound command context are admitted.
++
++The SDK path runs the standard single-use `tool_execution` middleware chain. The final-authorizer / mandatory-receipt kernel is that chain's terminal, **after** every rewrite. A middleware frame that does not call `next_call` is a short-circuit: zero handler calls and a truthful non-dispatched receipt. Approval is bound to the **final** effective payload after those rewrites (or the call is blocked). Ordinary vetoes, pruned-argument checks, and real agent guardrails still run before authorizers. Authorizer and receipt-sink callbacks each receive an isolated nested snapshot; mutating a view cannot change later guards, later sinks, or the returned receipt.
++
++Checked agent tool calls share this same final-authorizer/receipt kernel, including declined attempts (terminal `dispatched=false`). `pre_tool_call` on those paths may include optional `execution_phase="transform"` so a consuming gate can defer to its authorizer; hooks that omit the field keep legacy behavior. `ctx.dispatch_tool` remains the raw registry path.
++
++
++`plugins.isolation: host` is explicitly unsupported for the new registrars and `execute_checked` (they raise `PluginHostUnsupported`). Capabilities still report the refusal.
++
+ ### Act from inside a hook (profile + tools)
+ 
+ `ctx._cli_ref` is only populated in an **interactive CLI** session. It is `None` in the gateway, in non-interactive `hermes chat -q` runs, and in **kanban-spawned worker sessions** — so any plugin logic that reaches through `_cli_ref` silently no-ops in exactly those contexts. Two stable, session-agnostic APIs cover what hooks actually need:
+diff --git a/website/docs/user-guide/features/hooks.md b/website/docs/user-guide/features/hooks.md
+index c867d976e8..33cf6411dd 100644
+--- a/website/docs/user-guide/features/hooks.md
++++ b/website/docs/user-guide/features/hooks.md
+@@ -452,7 +452,7 @@ Payload fields below are the exact event-specific fields supplied by each call s
+ 
+ | Hook | Category | Exact timing and return behavior | Explicit payload fields | Privacy / sensitivity |
+ |---|---|---|---|---|
+-| [`pre_tool_call`](#pre_tool_call) | Directive/control | Once before execution; any valid `block` wins over any `approve` (then the first valid `approve`), and `modify` returns are shallow-merged into the tool arguments. | `tool_name`, `args`, `task_id`, `session_id`, `conversation_id`, `tool_call_id`, `turn_id`, `api_request_id`, `middleware_trace` | Raw arguments may contain user content, paths, commands, or secrets. |
++| [`pre_tool_call`](#pre_tool_call) | Directive/control | Once before execution; any valid `block` wins over any `approve` (then the first valid `approve`), and `modify` returns are shallow-merged into the tool arguments. | `tool_name`, `args`, `task_id`, `session_id`, `conversation_id`, `tool_call_id`, `turn_id`, `api_request_id`, `middleware_trace`, optional `execution_phase` (`transform` on the checked rewrite stage) | Raw arguments may contain user content, paths, commands, or secrets. |
+ | `post_tool_call` | Observer | After blocked, error, or successful result; return ignored. | `tool_name`, `args`, `result`, `task_id`, `session_id`, `conversation_id`, `tool_call_id`, `turn_id`, `api_request_id`, `duration_ms`, `status`, `error_type`, `error_message`, `middleware_trace` | Result/error text may contain arbitrary tool or user content and secrets. |
+ | `transform_tool_result` | Transform | After `post_tool_call`, before conversation append; first string replaces the result. | `tool_name`, `args`, `result`, `task_id`, `session_id`, `conversation_id`, `tool_call_id`, `turn_id`, `api_request_id`, `duration_ms`, `status`, `error_type`, `error_message` | Exposes the full model-bound result and arguments. |
+ | `transform_terminal_output` | Transform | After bounded foreground process capture, before final output limiting; first string replaces output. | `command`, `output`, `returncode`, `task_id`, `env_type` | Command/output may contain credentials. |
+diff --git a/website/docs/user-guide/features/plugins.md b/website/docs/user-guide/features/plugins.md
+index a251c80661..83a28a33a1 100644
+--- a/website/docs/user-guide/features/plugins.md
++++ b/website/docs/user-guide/features/plugins.md
+@@ -110,6 +110,7 @@ Every `ctx.*` API below is available inside a plugin's `register(ctx)` function.
+ | Add hooks | `ctx.register_hook("post_tool_call", callback)` |
+ | Add slash commands | `ctx.register_command(name, handler, description)` — adds `/name` in CLI and gateway sessions |
+ | Dispatch tools from commands | `ctx.dispatch_tool(name, args)` — invokes a registered tool with parent-agent context auto-wired |
++| Checked execution | `ctx.execute_checked(name, args, session_id=...)` — final authorizers + mandatory receipts after every rewrite; see [Checked execution](../../developer-guide/plugins/index.md#checked-execution) |
+ | Add CLI commands | `ctx.register_cli_command(name, help, setup_fn, handler_fn)` — adds `hermes <plugin> <subcommand>` |
+ | Inject messages | `ctx.inject_message(content, role="user", session_key=... \| origin=...)` - see [Injecting Messages](#injecting-messages) |
+ | Post and edit a status message | `handle = ctx.post_message(text)`, then `handle.edit(text)` — see [Posting a live message](#posting-a-live-message) |

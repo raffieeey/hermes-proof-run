@@ -1,2 +1,6 @@
 __pycache__/
 *.pyc
+
+# Local walkthrough output
+/demo-result.json
+/workflow-check.json

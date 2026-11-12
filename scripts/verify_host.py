@@ -749,6 +749,44 @@ probe("outcomes", "O5-secret-stop-refused", "C6", sensitive_capture("stop"))
 probe("outcomes", "O6-secret-learn-refused", "C6", sensitive_capture("learn"))
 probe("host", "H8-legacy-rebind-migration", "C6", legacy_migration)
 probe("host", "H9-symlink-unbind-contained", "C6", symlink_unbind)
+
+
+def workflow_command_surface():
+    with host() as h:
+        usage = h.command("")
+        started = h.command("capture start route-ticket")
+        finished = h.command("capture finish")
+        contract = (
+            h.home / "plugin-data" / "proof-run" / "contracts" / "route-ticket.json"
+        ).exists()
+        missing = h.command("run route-ticket")
+        dup = h.command('run route-ticket {"ticket_id": "T-21", "ticket_id": "T-22"}')
+        observed = {
+            "usage": usage,
+            "started": started,
+            "finished": finished,
+            "schema2_created": contract,
+            "run": missing,
+            "duplicate_json": dup,
+        }
+        run_ok = (
+            "HOST_CAPABILITY_MISSING" in missing
+            or "WORKFLOW_NOT_PROMOTED" in missing
+            or "DEMO_EVIDENCE_INCOMPLETE" in missing
+            or "INPUT_INVALID" in missing
+        )
+        return (
+            "new capture/run commands exist; capture does not activate schema-2; invalid JSON/run fail closed",
+            observed,
+            ("capture start" in usage or "Capture" in started)
+            and not contract
+            and run_ok
+            and "INPUT_INVALID" in dup
+            and "live (" not in started,
+        )
+
+
+probe("host", "H10-workflow-command-surface", "C2", workflow_command_surface)
 summary = {
     "isolation": "in_process",
     "plugin": str(ARGS.plugin),

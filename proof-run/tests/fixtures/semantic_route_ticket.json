@@ -1,0 +1,161 @@
+{
+  "format": "proof.workflow/v1",
+  "workflow_id": "route-support-ticket",
+  "status": "candidate",
+  "provenance": {
+    "kind": "synthetic-fixture",
+    "actual_demonstration_receipt": false,
+    "teacher_outcome_assurance": "not_measured",
+    "source_receipt_refs": [],
+    "promotion_authority": "operator-authorized"
+  },
+  "inputs": {
+    "ticket_id": {
+      "type": "string",
+      "pattern": "^T-[0-9]{1,8}$"
+    }
+  },
+  "constants": {},
+  "authority": {
+    "tenant": "host-verified-context",
+    "tools": [
+      "example_ticket_get",
+      "example_ticket_route_if_version",
+      "example_ticket_operation_status"
+    ],
+    "queue_candidates": ["billing", "access", "incident"],
+    "effects": "internal-ticket-routing-only",
+    "arbitrary_tool_calls": false
+  },
+  "adapter_id": "example-ticket-v1",
+  "limits": {
+    "serial_effects": true,
+    "max_effects": 1,
+    "max_model_calls": 1,
+    "on_unknown": "stop-and-reconcile",
+    "provider_fallback": false
+  },
+  "model_route": {
+    "provider": "controlled-test",
+    "model": "fake-follower",
+    "fallback": false,
+    "inference": false
+  },
+  "unresolved": [],
+  "policy": {
+    "revision": "routing-policy-1",
+    "source": "operator-reviewed-domain-policy-not-inferred-from-one-demo"
+  },
+  "nodes": [
+    {
+      "id": "ticket",
+      "kind": "read",
+      "tool": "example_ticket_get",
+      "args": {
+        "ticket_id": {"input": "/ticket_id"}
+      },
+      "required_fields": [
+        "tenant_id",
+        "ticket_id",
+        "source_revision",
+        "body",
+        "queue",
+        "last_routing_operation",
+        "routing_revision"
+      ]
+    },
+    {
+      "id": "identity",
+      "kind": "assert",
+      "checks": [
+        {
+          "op": "eq",
+          "left": {"node": "ticket", "pointer": "/tenant_id"},
+          "right": {"host_context": "/tenant_id"}
+        },
+        {
+          "op": "eq",
+          "left": {"node": "ticket", "pointer": "/ticket_id"},
+          "right": {"input": "/ticket_id"}
+        }
+      ],
+      "on_failure": "TARGET_IDENTITY_MISMATCH"
+    },
+    {
+      "id": "queue",
+      "kind": "decide",
+      "source": {"node": "ticket", "pointer": "/body"},
+      "candidates": ["billing", "access", "incident"],
+      "output": "queue-decision/v1",
+      "allow_abstain": true,
+      "on_abstain": "needs_review"
+    },
+    {
+      "id": "route",
+      "kind": "effect",
+      "tool": "example_ticket_route_if_version",
+      "args": {
+        "tenant_id": {"node": "ticket", "pointer": "/tenant_id"},
+        "ticket_id": {"node": "ticket", "pointer": "/ticket_id"},
+        "expected_source_revision": {"node": "ticket", "pointer": "/source_revision"},
+        "queue": {"node": "queue", "pointer": "/queue"},
+        "expected_routing_revision": {"node": "ticket", "pointer": "/routing_revision"},
+        "operation_key": {"effect_intent": "route", "pointer": "/operation_key"}
+      },
+      "operation_identity": {
+        "namespace": "route-ticket-v1",
+        "parts": [
+          {"node": "ticket", "pointer": "/tenant_id"},
+          {"node": "ticket", "pointer": "/ticket_id"},
+          {"node": "ticket", "pointer": "/source_revision"},
+          {"host_context": "/routing_intent_epoch"}
+        ]
+      },
+      "resource": {
+        "tenant": {"host_context": "/tenant_id"},
+        "target": {"input": "/ticket_id"},
+        "action": {"literal": "route"}
+      }
+    },
+    {
+      "id": "after",
+      "kind": "read",
+      "tool": "example_ticket_get",
+      "args": {
+        "ticket_id": {"input": "/ticket_id"}
+      },
+      "freshness": "fresh-independent-after-effect"
+    },
+    {
+      "id": "goal",
+      "kind": "assert",
+      "checks": [
+        {
+          "op": "eq",
+          "left": {"node": "after", "pointer": "/tenant_id"},
+          "right": {"host_context": "/tenant_id"}
+        },
+        {
+          "op": "eq",
+          "left": {"node": "after", "pointer": "/ticket_id"},
+          "right": {"input": "/ticket_id"}
+        },
+        {
+          "op": "eq",
+          "left": {"node": "after", "pointer": "/queue"},
+          "right": {"effect_intent": "route", "pointer": "/payload/queue"}
+        },
+        {
+          "op": "eq",
+          "left": {"node": "after", "pointer": "/last_routing_operation"},
+          "right": {"effect_intent": "route", "pointer": "/operation_key"}
+        }
+      ]
+    }
+  ],
+  "recovery": {
+    "tool": "example_ticket_operation_status",
+    "not_found": "unknown_outcome-no-retry"
+  },
+  "host_context_requirements": ["tenant_id", "routing_intent_epoch"]
+}

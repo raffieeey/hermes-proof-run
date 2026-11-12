@@ -14,14 +14,18 @@ import time
 
 from plugins.plugin_storage import plugin_data_dir
 
-from .proof_run import core
+from .proof_run import commands, core, hostport
+from .proof_run.store import WorkflowStore
 
 _BUFFER_MAX = 100
 _PENDING_MAX = 256
 _FACT_MAX_AGE = 60.0
 _USAGE = (
     "Usage: /proof start <name> [intent] | stop | cancel | "
-    "learn <name> [N] | rebind <name> | status | unbind <name>"
+    "learn <name> [N] | rebind <name> | status | unbind <name> | "
+    "capture start <name> [intent] | capture finish | capture cancel | "
+    "prepare <name> [json] | inspect <name> | promote <name> <revision> | "
+    "run <name> [json] | runs | show <run-id> | cancel-run <run-id> | resume <run-id>"
 )
 
 
@@ -46,6 +50,8 @@ def _block(message):
 
 
 def _on_pre_tool_call(ctx, tool_name, args, **kwargs):
+    if hostport.transform_deferral_active(ctx, kwargs.get("execution_phase")):
+        return None
     state = _state(ctx)
     session = _sid(kwargs.get("session_id"))
     args = args or {}
@@ -236,7 +242,17 @@ def _learn(ctx, state, args, session):
     return f"Contract '{name}' is live (v{contract['version']}), learned from {len(calls)} calls."
 
 
-def _handle(ctx, raw_args: str, session_id: str = "default") -> str:
+def _handle(ctx, raw_args: str, session_id: str = "default", session_key=None, platform=None, source=None) -> str:
+    new = commands.handle(
+        ctx,
+        raw_args,
+        session_id=session_id,
+        session_key=session_key,
+        platform=platform,
+        source=source,
+    )
+    if new is not None:
+        return new
     args = (raw_args or "").strip().split()
     if not args:
         return _USAGE
@@ -285,15 +301,35 @@ def register(ctx):
         "buffers": {},
         "pending": {},
         "unproven": set(),
+        "checked_frames": {},
+        "authorizer_guard": "unattempted",
     }
     ctx.register_command(
         name="proof",
-        handler=lambda raw, session_id="default": _handle(ctx, raw, session_id),
-        description="Capture demonstrated actions and check their observations before reuse",
-        args_hint="start <name> | stop | cancel | learn <name> [N] | rebind <name> | status | unbind <name>",
+        handler=lambda raw, session_id="default", session_key=None, platform=None, source=None: _handle(
+            ctx,
+            raw,
+            session_id=session_id,
+            session_key=session_key,
+            platform=platform,
+            source=source,
+        ),
+        description="Capture demonstrated actions, review a workflow, and run it with checked execution",
+        args_hint="start <name> | stop | capture start <name> | prepare <name> | run <name> [json] | status | unbind <name>",
     )
     ctx.register_hook("pre_tool_call", lambda **kw: _on_pre_tool_call(ctx, **kw))
     ctx.register_hook("post_tool_call", lambda **kw: _on_post_tool_call(ctx, **kw))
     ctx.register_hook(
         "on_session_finalize", lambda **kw: _on_session_finalize(ctx, **kw)
     )
+    try:
+        root = _contracts_root(ctx)
+        store = WorkflowStore(root)
+        if hasattr(ctx, "register_tool_authorizer"):
+            ctx.register_tool_authorizer(hostport.make_legacy_authorizer(ctx, store))
+            ctx._proof_run_state["authorizer_guard"] = "installed"
+        if hasattr(ctx, "register_execution_receipt_sink"):
+            ctx.register_execution_receipt_sink(hostport.make_receipt_sink(ctx, store))
+    except Exception:
+        if ctx._proof_run_state.get("authorizer_guard") != "installed":
+            ctx._proof_run_state["authorizer_guard"] = "failed"

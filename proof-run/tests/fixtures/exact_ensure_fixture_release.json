@@ -1,0 +1,119 @@
+{
+  "format": "proof.workflow/v1",
+  "workflow_id": "ensure-fixture-release",
+  "status": "candidate",
+  "provenance": {
+    "kind": "synthetic-fixture",
+    "actual_demonstration_receipt": false,
+    "teacher_outcome_assurance": "not_measured",
+    "source_receipt_refs": [],
+    "promotion_authority": "operator-authorized"
+  },
+  "inputs": {},
+  "constants": {
+    "service": "fixture-api",
+    "version": "v1"
+  },
+  "authority": {
+    "tenant": "host-verified-context",
+    "tools": ["check_service_health", "deploy_service"],
+    "effects": "internal-fixture-deploy-only",
+    "arbitrary_tool_calls": false
+  },
+  "adapter_id": "fixture-release-v1",
+  "limits": {
+    "serial_effects": true,
+    "max_effects": 1,
+    "max_model_calls": 0,
+    "on_unknown": "stop-and-reconcile",
+    "provider_fallback": false
+  },
+  "model_route": null,
+  "unresolved": [],
+  "nodes": [
+    {
+      "id": "health_before",
+      "kind": "read",
+      "tool": "check_service_health",
+      "args": {
+        "service": {"constant": "/service"}
+      },
+      "required_fields": ["service", "status", "version"]
+    },
+    {
+      "id": "preflight",
+      "kind": "assert",
+      "checks": [
+        {
+          "op": "eq",
+          "left": {"node": "health_before", "pointer": "/status"},
+          "right": {"literal": "healthy"}
+        },
+        {
+          "op": "eq",
+          "left": {"node": "health_before", "pointer": "/service"},
+          "right": {"constant": "/service"}
+        }
+      ],
+      "on_failure": "STATE_DRIFT"
+    },
+    {
+      "id": "deploy",
+      "kind": "effect",
+      "tool": "deploy_service",
+      "args": {
+        "service": {"constant": "/service"},
+        "version": {"constant": "/version"},
+        "operation_key": {"effect_intent": "deploy", "pointer": "/operation_key"}
+      },
+      "operation_identity": {
+        "namespace": "ensure-fixture-release-v1",
+        "parts": [
+          {"constant": "/service"},
+          {"constant": "/version"},
+          {"host_context": "/routing_intent_epoch"}
+        ]
+      },
+      "resource": {
+        "tenant": {"host_context": "/tenant_id"},
+        "target": {"constant": "/service"},
+        "action": {"literal": "deploy"}
+      }
+    },
+    {
+      "id": "health_after",
+      "kind": "read",
+      "tool": "check_service_health",
+      "args": {
+        "service": {"constant": "/service"}
+      },
+      "required_fields": ["service", "status", "version"],
+      "freshness": "fresh-independent-after-effect"
+    },
+    {
+      "id": "goal",
+      "kind": "assert",
+      "checks": [
+        {
+          "op": "eq",
+          "left": {"node": "health_after", "pointer": "/service"},
+          "right": {"constant": "/service"}
+        },
+        {
+          "op": "eq",
+          "left": {"node": "health_after", "pointer": "/status"},
+          "right": {"literal": "healthy"}
+        },
+        {
+          "op": "eq",
+          "left": {"node": "health_after", "pointer": "/version"},
+          "right": {"effect_intent": "deploy", "pointer": "/payload/version"}
+        }
+      ]
+    }
+  ],
+  "recovery": {
+    "tool": "deploy_operation_status",
+    "not_found": "unknown_outcome-no-retry"
+  }
+}

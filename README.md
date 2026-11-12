@@ -1,80 +1,122 @@
 # Proof Run
 
-**Help cheaper models behave more like frontier models on repeatable tasks.**
+**Show a frontier model the way once. Reuse the procedure with a cheaper model.**
 
-Hermes Agent Plugin Hackathon entry. No model calls or network requests are made by the plugin.
+Proof Run records the checks and actions of a successful Hermes task, makes the procedure inspectable, and checks covered actions when you reuse it.
 
-## The pitch
+**v0.2.0** · Hermes Agent plugin · MIT
 
-Let a frontier model do the task once. Proof Run captures the checks and actions from that successful run. Then use a cheaper model for the repeats, with those guardrails in place.
+[![Watch the Proof Run product overview](docs/assets/proof-run-overview.jpg)](https://video.twimg.com/amplify_video/2120154419841175552/vid/avc1/1280x720/dtBe-b4TaqjP1UsV.mp4?tag=29)
 
-If the agent skips a recorded check or changes a protected action, Proof Run stops that call before it runs. When a change is intentional, demonstrate the new version and update the contract.
+[Watch the overview](https://video.twimg.com/amplify_video/2120154419841175552/vid/avc1/1280x720/dtBe-b4TaqjP1UsV.mp4?tag=29) · [Download the video](https://github.com/raffieeey/hermes-proof-run/releases/download/v0.2.0/proof-run-overview.mp4)
 
-## Install
+## Get started
+
+Use Hermes Agent on a Linux/POSIX host with Python 3.11 or newer. Install the release:
 
 ```sh
-hermes plugins install raffieeey/hermes-proof-run/proof-run --enable
+hermes plugins install raffieeey/hermes-proof-run/proof-run --ref v0.2.0 --enable
 ```
 
-The plugin lives in the repository's `proof-run/` subdirectory. Review third-party plugin code before enabling it. A running gateway may need a safe restart to load an updated plugin; updating this Git repository does not replace code already loaded in a running process.
+In the Hermes session where you will demonstrate the task:
 
-## Use
+```text
+/proof start deploy-api
+```
 
-1. Run `/proof start deploy-api` in the session that will demonstrate the task.
-2. Let the agent perform the task, including its read checks and mutations.
-3. Run `/proof stop`. A successful capture becomes a live, profile-scoped contract in one atomic write. There is no separate `/proof bind` command.
-4. On reuse, perform the same reads again before the covered mutation. The complete JSON argument object must match a demonstrated action, with the same JSON types. Missing, changed, expired or consumed observations block.
-5. If a change is intentional, run `/proof rebind deploy-api`, demonstrate the changed task, then `/proof stop`. Only that contract, only in the recording session, is exempt during re-demonstration. Other sessions and contracts remain gated.
+Ask your frontier model to perform the task, including its normal read checks and actions. When it has finished:
 
-Other commands:
+```text
+/proof stop
+```
 
-- `/proof learn deploy-api 15`: capture the last 15 tool calls from this session. Omit the count to use its current rolling buffer of up to 100 calls. Counts must be between 1 and 100. Inspect the scope carefully: a recent buffer can contain more than one task.
-- `/proof status`: list versions, bound state and evidence status.
-- `/proof cancel`: discard this session's in-progress capture without changing a saved contract.
-- `/proof unbind deploy-api`: explicitly stop enforcing that saved contract.
+Switch to your preferred cheaper model through Hermes and repeat the task. Proof Run checks the recorded action arguments and requires fresh matching reads before covered mutations. A skipped check or changed protected action is blocked before that call runs.
 
-Existing names require `rebind`, not an accidental overwrite through `start` or `learn`. Failed captures leave the previous contract unchanged. Old contract versions are retained in the private history directory. Legacy files containing recognized secrets are refused and need manual removal or sanitization outside the guarded agent before a fresh capture. Version-1 contracts from the original prototype require re-recording; their inferred ranges are not silently trusted.
+Use any model or provider configured in Hermes for guarded repeats. There is no model-size requirement. When you intentionally change the task, use `/proof rebind deploy-api`, demonstrate the new version, then `/proof stop`.
 
-## Verify
+## Two ways to reuse a demonstration
 
-Core and storage tests need only Python's standard library on a supported POSIX host:
+| Mode | Use it for | Setup |
+|---|---|---|
+| Guarded repeats | Reusing the recorded checks and exact action arguments with your chosen Hermes model | Standard Hermes plugin installation |
+| Reviewed workflows | New input IDs, explicit bindings, ordered execution, stored runs and recovery | [Supported workflow host](docs/host-integration.md) |
+
+Guarded mode uses `/proof start` and `/proof stop`. Workflow mode uses a separate capture, review and promotion flow so you control which inputs, decisions and effects may vary.
+
+## Run a reviewed workflow
+
+With the [supported Hermes setup](docs/host-integration.md):
+
+1. `/proof capture start route-ticket` starts a teaching trace.
+2. Demonstrate the task through checked tools.
+3. `/proof capture finish` saves the trace.
+4. Compile the trace with `/proof prepare route-ticket <review-json>`, using the bindings and policy in the [complete example review bundle](scripts/run_actual_host_journey.py).
+5. `/proof inspect route-ticket` shows the actual bindings, policy, checks and model route.
+6. `/proof promote route-ticket 1` makes the reviewed revision available.
+7. `/proof run route-ticket {"ticket_id":"T-22"}` starts a stored run on the new input.
+
+The runner performs the sequence, checks live state, enforces the reviewed effect and records its outcome. An optional local Ollama follower selects an allowed decision or asks for review. Workflow model routes are explicit and do not silently change providers.
+
+The [complete synthetic ticket example](scripts/run_actual_host_journey.py) includes a review bundle and shows the registered-command path from capture through target verification. The [host setup guide](docs/host-integration.md) walks through running it.
+
+Useful commands:
+
+| Command | Purpose |
+|---|---|
+| `/proof status` | View saved guarded contracts |
+| `/proof learn <name> [N]` | Capture the current session's recent tool buffer, up to 100 calls |
+| `/proof rebind <name>` | Demonstrate an intentional change |
+| `/proof cancel` | Discard the current guarded recording |
+| `/proof unbind <name>` | Stop enforcing one guarded contract |
+| `/proof runs` | List workflow runs |
+| `/proof show <run-id>` | Inspect a run and its evidence |
+| `/proof cancel-run <run-id>` | Cancel a workflow run |
+| `/proof resume <run-id>` | Reconcile an interrupted run using its stored operation identity |
+
+## Try the local walkthrough
+
+From a clone of this repository:
 
 ```sh
+python3 scripts/demo_runner.py --out ./demo-result.json
+```
+
+This fixture-data walkthrough covers teaching, review, promotion, execution and stored target readback. It uses a scripted teacher and a model-free control, so you can inspect the mechanics without an API key.
+
+## Cloud follower results
+
+In our first paired cloud tool-following pilot, the same models received identical tasks, policy, tools and a five-call budget. Adding the reviewed frontier teacher guide changed full workflow completion as follows:
+
+| Follower | Policy + tools | With teacher guide |
+|---|---:|---:|
+| `gpt-oss:20b` | 0/2 | 1/2 |
+| `gemma4:31b` | 1/2 | 2/2 |
+
+All eight runs reserved the correct quantity. Most missed completions ran out of calls before the closing step. Guided runs used about 22% more reported tokens. See the [measured results, methodology and offline replay](benchmarks/cloud-following-pilot/README.md) for the full comparison. This separate cloud pilot does not change the workflow runner's built-in local Ollama backend.
+
+## Test the release
+
+```sh
+python3 -m pip install 'jsonschema>=4.18,<5'
 cd proof-run
 PYTHONPATH=. python3 -m unittest discover -s tests -v
+cd ..
+python3 -m unittest discover -s benchmarks/cloud-following-pilot -p 'test_*.py' -v
+python3 benchmarks/cloud-following-pilot/replay.py
 ```
 
-For real-host integration, use an already-provisioned Hermes interpreter and checkout. From the repository root:
+The plugin suite covers 146 tests. The benchmark adds 10 driver tests and offline replay of 39 responses across 8 trials. These commands make no model calls. [Verification details](docs/verification.md) document the host checks and individual evidence records.
 
-```sh
-python3 scripts/verify_host.py --host-source /path/to/hermes-agent
-```
+## How protection works
 
-This uses the actual plugin loader/context, slash-command dispatcher, JSON result normalization, pre/post hooks and registry. Its synthetic mutation handler has a real call counter, so a drift block must prevent execution, not merely return a plausible message. It also probes session isolation, read freshness, concurrent consumption, failed capture/rebind, evidence failure across reload, command validation and corrupt contracts. The script refuses socket connections and writes only isolated temporary homes. It exits nonzero for failed checks. It is not a live deployment or a model benchmark.
+Covered actions retain their JSON types and exact values unless an operator explicitly reviews workflow bindings. Reads are session-bound, expire, and are consumed before covered mutations. A mismatching outcome pauses the affected contract until it is re-demonstrated.
 
-Early prototype work included real `glm-5.3` and `glm-5.3-flash` requests on the same tasks, alongside scripted start/stop/learn/rebind and deviation-blocking tests.
+Keep plugin state in a private, trusted directory. Read the [safety and storage reference](docs/safety.md) for tool coverage, freshness and filesystem behavior, and the [workflow design](docs/design.md) for identity, authorization and recovery.
 
-See [verification and migration notes](docs/verification.md).
+## Architecture
 
-## Prior-art boundary
+The release implements the reviewed TDD execution loop. The [TDD-to-code map](docs/tdd-implementation.md) links capture, compilation, promotion, checked execution and recovery to their implementation and tests. See the [design reference](docs/design.md) for the data model and execution phases.
 
-Adjacent work includes workflow-record (record-to-skill), crash-test (fault injection), agent-replay/agentrec (trace replay) and Agent Behavioral Contracts. This entry combines local capture, inspectable contracts, pre-execution checks and operator re-demonstration. It is not a claim to have invented recording or guardrails.
+## Background
 
-## Safety contract and limits
-
-- **Exact actions, not guessed ranges.** No numeric interpolation, recombination of independently observed fields, or additional `force` argument is inferred as safe. Nested objects, arrays, null and booleans retain their JSON meaning.
-- **Bound observations.** Read facts are matched to their read arguments and session. Only reads before the action contribute to that action's preconditions. Numeric and boolean facts use equality by default; one example cannot establish a general safety threshold.
-- **Consumable evidence.** Observations expire after 60 seconds and are consumed before dispatch of a mutation, including competing calls. Refresh reads before each reuse. A read is not a transaction: external state can still change between a read and the mutation. Use a transactional tool for that guarantee.
-- **Known failures are not proof.** Host error/cancellation metadata, error JSON and nonzero command exits reject a capture. Missing mutation evidence is rejected. Recorded result fields are checked on guarded replays; a mismatch persists `unproven` and blocks subsequent covered calls, including after reload. This cannot undo the mutation that produced the mismatch.
-- **Scope is deliberately narrow.** Known read-only tools and unrelated tools are not generally sandboxed. New tool names, alternate execution mechanisms, external side effects and adversarial models are not contained by this plugin. Multiple bound contracts covering the same tool must all pass and can intentionally conflict. A step with no observed reads provides an argument/evidence check, not an independent world-state guarantee.
-- **Fail closed on damaged protection.** An invalid/unreadable contract stops mutating calls rather than silently disappearing. Repair it outside the guarded agent or re-record a valid contract as appropriate.
-- **Private local persistence.** Contracts are profile-scoped under `plugin_data_dir("proof-run")/contracts/`, with private directories, mode-0600 files, serialized atomic updates and retained versions. Symlinked storage targets are refused. Known credential patterns and sensitive named fields are refused, not silently rewritten into a different allowed action. Secret detection is heuristic, not a guarantee that arbitrary credentials or personal data can be recognized. Do not record sensitive tasks.
-- **Host boundary.** The tested in-process host is Hermes commit `a2db0efb2969d2527d27bf95a53066f5e064d9ad` on Linux. Durable locking uses POSIX file locking. Other operating systems or host versions are not certified by these checks. The host must deliver consistent session and tool-call identity. Hermes' normal approvals remain in force.
-
-## What this is, and is not
-
-A cheaper model can use the same guard as a frontier model. That is not model training or automatic workflow replay: Proof Run does not teach the model a plan, choose the next tool, enforce an entire workflow's ordering, or establish that the task is correct. The operator supplies the task and decides whether a demonstration is worth preserving. There is no measured frontier-to-cheap-model quality or cost improvement claimed here.
-
-**Capture a demonstrated action, then check it before reuse.** Proof Run is a local Hermes plugin that checks tool arguments and observed preconditions before a covered mutating call runs. A mismatching result marks the contract **unproven** and stops subsequent covered calls until the operator re-demonstrates it.
-
-Historical `14/14` prototype assertions used a fake plugin context and did not prove real-host integration or model learning.
+Proof Run is a Hermes Agent Plugin Hackathon entry. Adjacent work includes workflow-record, crash-test, agent-replay/agentrec and Agent Behavioral Contracts. Proof Run combines demonstration capture, reviewable contracts, pre-execution checks and operator-controlled reuse.

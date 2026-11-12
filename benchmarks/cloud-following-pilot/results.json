@@ -1,0 +1,58 @@
+{
+  "scope": "two-model/two-case prompt-and-tool-following microbenchmark, not integrated Proof Run IR or general cost savings",
+  "teacher": "actual current frontier Hermes conversation, separately demonstrated and verified",
+  "results": [
+    {
+      "model": "gpt-oss:20b",
+      "condition": "untaught",
+      "completed_cases": 2,
+      "expected_cases": 2,
+      "passed": 0,
+      "http_calls": 10,
+      "input_tokens": 9412,
+      "output_tokens": 388,
+      "wall_s_sum": 13.236166557995602,
+      "errors": []
+    },
+    {
+      "model": "gpt-oss:20b",
+      "condition": "taught",
+      "completed_cases": 2,
+      "expected_cases": 2,
+      "passed": 1,
+      "http_calls": 10,
+      "input_tokens": 12542,
+      "output_tokens": 413,
+      "wall_s_sum": 12.41936210799031,
+      "errors": []
+    },
+    {
+      "model": "gemma4:31b",
+      "condition": "untaught",
+      "completed_cases": 2,
+      "expected_cases": 2,
+      "passed": 1,
+      "http_calls": 10,
+      "input_tokens": 11478,
+      "output_tokens": 460,
+      "wall_s_sum": 8.833589585963637,
+      "errors": []
+    },
+    {
+      "model": "gemma4:31b",
+      "condition": "taught",
+      "completed_cases": 2,
+      "expected_cases": 2,
+      "passed": 2,
+      "http_calls": 9,
+      "input_tokens": 13113,
+      "output_tokens": 486,
+      "wall_s_sum": 7.737328105024062,
+      "errors": []
+    }
+  ],
+  "requests": 39,
+  "cap": 40,
+  "complete": true,
+  "teacher_cost": "not separately metered; no amortized dollar-savings claim"
+}

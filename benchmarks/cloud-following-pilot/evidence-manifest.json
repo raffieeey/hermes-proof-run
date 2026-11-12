@@ -1,0 +1,15 @@
+{
+  "kind": "synthetic published pilot; provider response ids and private billing metadata omitted; no credentials or hidden reasoning stored",
+  "sha256": {
+    "calls.jsonl": "921be3ea502e41cdb614ce7d02d325fa3686258c595c3f79bc6be22c8c59fc8b",
+    "driver.py": "3a6c147b8cb4da15ddd00a88ee66488a6581d06fbc97ed9f4da201c17e341288",
+    "fixtures.json": "3fff172847945b305a2acde7773e4a07d4ca1467f55ca96ba821517616904b86",
+    "no-model-control.json": "8c28077b933eaaaa83223dad555447d27d842ec20c3657cdc18f7f7ad0bb6a68",
+    "replay.py": "8f681bd3ea1cb2aa556e2fe7d7c06771eaa8adae538428edf63a6ce089e50f1a",
+    "results.json": "d028a0919537ff83aa8e240b930b96a70e0b9858021253a65f1aceb48a98de55",
+    "teacher-guide.md": "5bd09c555a9bd309b75b05ea1bc77093a62c7bb924473c18f4c93ef811911175",
+    "teacher-trace.json": "0025bb55359840f4837a152c2d0750f1cb25cff99904ddfe48d529d8e7c6d196",
+    "test_driver.py": "ad13f3957846c14398dd5e6b4604c1dfdc5303cd9c96e8cf5a1144ae25402fe6",
+    "trials.jsonl": "3db8692aad5c09d5f1c5a8d960daa334fbb318f23365a9cd7188750e63d1a0ff"
+  }
+}

@@ -1,0 +1,106 @@
+{
+  "teacher": {
+    "model": "gpt-6.1-sol",
+    "provider": "openai-codex",
+    "source": "actual native Hermes main conversation, six tool invocations, not a pre-scripted journey",
+    "token_cost": "not separately metered"
+  },
+  "snapshot": {
+    "completed": true,
+    "terminal": true,
+    "effects": 1,
+    "wrong_mutation_attempts": 0,
+    "unknown_resolved": true,
+    "readback_verified": true,
+    "final_available": 9,
+    "request_status": "completed",
+    "tool_calls": 6,
+    "audit": [
+      {
+        "tool": "request_lookup",
+        "args": {
+          "request_id": "REQ-DEMO"
+        },
+        "result": {
+          "ok": true,
+          "request_id": "REQ-DEMO",
+          "tenant": "tenant-A",
+          "sku": "PART-DEMO",
+          "quantity": 3,
+          "source_revision": 1,
+          "status": "pending",
+          "customer_note": "Approved request; fulfill the three items.",
+          "customer_note_untrusted": true
+        }
+      },
+      {
+        "tool": "inventory_read",
+        "args": {
+          "sku": "PART-DEMO"
+        },
+        "result": {
+          "ok": true,
+          "sku": "PART-DEMO",
+          "available": 12,
+          "stock_version": 8,
+          "snapshot_token": "52dd8df4be3d64b16adf9d77d925989a73bc0eafe460559f09a9b798a37b0600"
+        }
+      },
+      {
+        "tool": "reserve_stock",
+        "args": {
+          "request_id": "REQ-DEMO",
+          "sku": "PART-DEMO",
+          "quantity": 3,
+          "expected_version": 8,
+          "snapshot_token": "52dd8df4be3d64b16adf9d77d925989a73bc0eafe460559f09a9b798a37b0600",
+          "operation_key": "reserve/REQ-DEMO/1"
+        },
+        "result": {
+          "ok": true,
+          "success": false,
+          "state": "unknown",
+          "operation_key": "reserve/REQ-DEMO/1"
+        }
+      },
+      {
+        "tool": "operation_status",
+        "args": {
+          "operation_key": "reserve/REQ-DEMO/1"
+        },
+        "result": {
+          "ok": true,
+          "operation_key": "reserve/REQ-DEMO/1",
+          "state": "committed"
+        }
+      },
+      {
+        "tool": "verify_fulfillment",
+        "args": {
+          "request_id": "REQ-DEMO"
+        },
+        "result": {
+          "ok": true,
+          "request_id": "REQ-DEMO",
+          "request_status": "reserved",
+          "available": 9,
+          "stock_version": 9,
+          "effects": 1,
+          "verified": true
+        }
+      },
+      {
+        "tool": "finish_task",
+        "args": {
+          "request_id": "REQ-DEMO",
+          "status": "completed"
+        },
+        "result": {
+          "ok": true,
+          "accepted": true,
+          "status": "completed"
+        }
+      }
+    ]
+  }
+}
