@@ -10,6 +10,15 @@ https://github.com/user-attachments/assets/a712c878-fc68-471e-ae21-008ff673e3de
 
 *Product overview. Unmute the player for audio.* [Download the video](https://github.com/raffieeey/hermes-proof-run/releases/download/v0.2.0/proof-run-overview.mp4)
 
+## What's new in v0.2.0
+
+- **Run a reviewed procedure:** capture → prepare → inspect → promote → `/proof run <name> [inputs-json]`.
+- **Reuse it on new inputs:** typed inputs and explicit live bindings replace hard-coded example IDs, within the scope you review.
+- **Track and recover runs:** stored run IDs, status, cancellation and reconciliation of the original operation after an uncertain outcome.
+- **Choose the workflow follower:** a model-free control or a bounded local Ollama decision, with an explicit model route and no silent provider fallback.
+
+The existing exact-action guard remains available alongside workflows. See the [release notes](CHANGELOG.md#020---2026-11-12) and [TDD-to-code map](docs/tdd-implementation.md) for the implemented scope.
+
 ## Get started
 
 Use Hermes Agent on a Linux/POSIX host with Python 3.11 or newer. Install the release:
@@ -17,6 +26,10 @@ Use Hermes Agent on a Linux/POSIX host with Python 3.11 or newer. Install the re
 ```sh
 hermes plugins install raffieeey/hermes-proof-run/proof-run --ref v0.2.0 --enable
 ```
+
+Publishing a release does not update an already-installed plugin or running gateway automatically. Workflow execution also needs the [supported host setup](docs/host-integration.md).
+
+### Guarded repeats on standard Hermes
 
 In the Hermes session where you will demonstrate the task:
 
@@ -41,37 +54,65 @@ Use any model or provider configured in Hermes for guarded repeats. There is no 
 | Guarded repeats | Reusing the recorded checks and exact action arguments with your chosen Hermes model | Standard Hermes plugin installation |
 | Reviewed workflows | New input IDs, explicit bindings, ordered execution, stored runs and recovery | [Supported workflow host](docs/host-integration.md) |
 
-Guarded mode uses `/proof start` and `/proof stop`. Workflow mode uses a separate capture, review and promotion flow so you control which inputs, decisions and effects may vary.
+Guarded mode uses `/proof start` and `/proof stop`. Workflow mode uses a separate capture, review and promotion flow so you control which inputs, decisions and effects may vary. `/proof capture finish` saves a trace without activating a guarded contract; an existing legacy recording does not automatically become a runnable workflow.
 
 ## Run a reviewed workflow
 
-With the [supported Hermes setup](docs/host-integration.md):
+**Requires the version-matched checked-execution host patch in the [setup guide](docs/host-integration.md).** Installing the plugin alone does not enable workflow execution. A host without the required API returns `HOST_CAPABILITY_MISSING`; the runner does not fall back to unchecked dispatch.
+
+The v0.2.0 workflow command path supports **at most one effect (mutation) and one bounded decision per workflow**. `/proof prepare` recognizes a fixed catalog of example-ticket and service-health/deploy tool names. Other tool integrations require implementation work, not just different review JSON.
+
+With that setup:
 
 1. `/proof capture start route-ticket` starts a teaching trace.
 2. Demonstrate the task through checked tools.
 3. `/proof capture finish` saves the trace.
 4. Compile the trace with `/proof prepare route-ticket <review-json>`, using the bindings and policy in the [complete example review bundle](scripts/run_actual_host_journey.py).
 5. `/proof inspect route-ticket` shows the actual bindings, policy, checks and model route.
-6. `/proof promote route-ticket 1` makes the reviewed revision available.
+6. `/proof promote route-ticket <revision>` makes the exact revision just inspected available. Use `1` only if that is the inspected candidate's revision.
 7. `/proof run route-ticket {"ticket_id":"T-22"}` starts a stored run on the new input.
 
-The runner performs the sequence, checks live state, enforces the reviewed effect and records its outcome. An optional local Ollama follower selects an allowed decision or asks for review. Workflow model routes are explicit and do not silently change providers.
+Promotion authorizes that immutable workflow revision without executing its business effects. Subsequent runs reuse the standing review on new inputs; normal Hermes tool checks and approvals still apply.
+
+The runner performs the sequence, checks live state, enforces the reviewed effect and records its outcome. `/proof run` returns a run ID: use `/proof show <run-id>` to inspect its state and evidence rather than treating the initial acknowledgement as task completion. A verified effect readback does not independently verify that the follower's decision was correct.
 
 The [complete synthetic ticket example](scripts/run_actual_host_journey.py) includes a review bundle and shows the registered-command path from capture through target verification. The [host setup guide](docs/host-integration.md) walks through running it.
 
-Useful commands:
+## Useful commands
+
+### Guarded repeats
 
 | Command | Purpose |
 |---|---|
+| `/proof start <name> [intent]` | Start a session-local demonstration |
+| `/proof stop` | Save a valid demonstration and activate its exact-action guard |
 | `/proof status` | View saved guarded contracts |
 | `/proof learn <name> [N]` | Capture the current session's recent tool buffer, up to 100 calls |
 | `/proof rebind <name>` | Demonstrate an intentional change |
 | `/proof cancel` | Discard the current guarded recording |
 | `/proof unbind <name>` | Stop enforcing one guarded contract |
+
+### Reviewed workflows
+
+| Command | Purpose |
+|---|---|
+| `/proof capture start <name> [intent]` | Start a trace-only teaching capture |
+| `/proof capture finish` | Save the captured trace without activating a legacy guard |
+| `/proof capture cancel` | Discard the current workflow capture |
+| `/proof prepare <name> [review-json]` | Compile a trace and review bundle into a candidate workflow |
+| `/proof inspect <name>` | Inspect the candidate's bindings, policy, authority, checks and model route |
+| `/proof promote <name> <revision>` | Authorize that reviewed revision without running its business effects |
+| `/proof run <name> [inputs-json]` | Start a stored run of the promoted workflow on the supplied inputs |
 | `/proof runs` | List workflow runs |
 | `/proof show <run-id>` | Inspect a run and its evidence |
-| `/proof cancel-run <run-id>` | Cancel a workflow run |
-| `/proof resume <run-id>` | Reconcile an interrupted run using its stored operation identity |
+| `/proof cancel-run <run-id>` | Request cancellation; an already-dispatched effect may still complete. Check the run status |
+| `/proof resume <run-id>` | Resume or reconcile using the original operation identity, not a fresh mutation |
+
+Optional `review-json` and `inputs-json` arguments are single JSON objects. See the [workflow design](docs/design.md#public-commands) and [example review bundle](scripts/run_actual_host_journey.py) for the detailed input and policy format. A captured example does not grant new authority or infer safe input ranges.
+
+## Model routes
+
+Guarded repeats use any model or provider configured in Hermes. Workflows use an explicit route: a model-free control or a bounded local Ollama follower over loopback HTTP. The built-in follower selects an authorized ticket queue or abstains; the runtime executes the sequence. There is no integrated cloud workflow adapter or silent provider fallback. The cloud pilot below evaluates a separate guide-and-tools setup.
 
 ## Try the local walkthrough
 
@@ -82,6 +123,8 @@ python3 scripts/demo_runner.py --out ./demo-result.json
 ```
 
 This fixture-data walkthrough covers teaching, review, promotion, execution and stored target readback. It uses a scripted teacher and a model-free control, so you can inspect the mechanics without an API key.
+
+For the full registered-command path through the patched Hermes host, use the isolated [workflow host self-test](docs/host-integration.md#check-the-complete-workflow). That example is also scripted and makes no model calls; it is not a frontier-to-cheaper-model quality benchmark.
 
 ## Cloud follower results
 
