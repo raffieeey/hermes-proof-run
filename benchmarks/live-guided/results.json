@@ -1,0 +1,71 @@
+{
+  "date": "2026-11-14",
+  "task": "synthetic inventory fulfillment",
+  "claim_ceiling": "One small task; 4 guided and 3 unguided samples. Both arms passed. No performance superiority, token-savings, or cost-savings claim.",
+  "arms": {
+    "teacher": {
+      "model": "glm-5.3",
+      "runs": 1,
+      "passed": 1,
+      "api_calls": [
+        6
+      ],
+      "total_tokens": [
+        16671
+      ],
+      "tools": [
+        "request_lookup",
+        "inventory_read",
+        "reserve_stock",
+        "verify_fulfillment",
+        "finish_task"
+      ]
+    },
+    "guided": {
+      "model": "glm-5.3-flash",
+      "runs": 4,
+      "passed": 4,
+      "api_calls": [
+        5,
+        5,
+        5,
+        5
+      ],
+      "total_tokens": [
+        16174,
+        15862,
+        15871,
+        15832
+      ],
+      "tools": [
+        "request_lookup",
+        "inventory_read",
+        "reserve_stock",
+        "verify_fulfillment",
+        "finish_task"
+      ]
+    },
+    "baseline": {
+      "model": "glm-5.3-flash",
+      "runs": 3,
+      "passed": 3,
+      "api_calls": [
+        6,
+        6,
+        6
+      ],
+      "total_tokens": [
+        16707,
+        16709,
+        16733
+      ],
+      "tools": [
+        "request_lookup",
+        "inventory_read",
+        "reserve_stock",
+        "verify_fulfillment",
+        "finish_task"
+      ]
+    }
+  }
+}

@@ -1,12 +1,13 @@
 name: proof-run
-version: "0.2.0"
-description: "Capture a frontier demonstration, review a bounded workflow, and reuse it with cheaper followers. Legacy exact gates remain. Optional loopback follower; no silent cloud fallback."
+version: "0.3.0"
+description: "Record a task once, save it as a procedure with inputs, and run it with a cheaper model that is guided and checked step by step. Strict exact guards and checked-execution workflows remain. No model or network calls by the plugin."
 entry: __init__.py
 author: raffieeey
 license: MIT
 provides_hooks:
   - pre_tool_call
   - post_tool_call
+  - pre_llm_call
   - on_session_finalize
 provides_tools: []
 provides_middleware: []

@@ -9,12 +9,13 @@ from __future__ import annotations
 from collections import deque
 from copy import deepcopy
 from pathlib import Path
+import shlex
 import threading
 import time
 
 from plugins.plugin_storage import plugin_data_dir
 
-from .proof_run import commands, core, hostport
+from .proof_run import commands, core, guided, hostport
 from .proof_run.store import WorkflowStore
 
 _BUFFER_MAX = 100
@@ -25,7 +26,8 @@ _USAGE = (
     "learn <name> [N] | rebind <name> | status | unbind <name> | "
     "capture start <name> [intent] | capture finish | capture cancel | "
     "prepare <name> [json] | inspect <name> | promote <name> <revision> | "
-    "run <name> [json] | runs | show <run-id> | cancel-run <run-id> | resume <run-id>"
+    "run <name> [json] | runs | show <run-id> | cancel-run <run-id> | resume <run-id> | "
+    "save [name=value ...] | pin <name> <tool>.<field> | unpin <name> <tool>.<field>"
 )
 
 
@@ -50,12 +52,29 @@ def _block(message):
 
 
 def _on_pre_tool_call(ctx, tool_name, args, **kwargs):
-    if hostport.transform_deferral_active(ctx, kwargs.get("execution_phase")):
-        return None
     state = _state(ctx)
     session = _sid(kwargs.get("session_id"))
     args = args or {}
     with state["lock"]:
+        run = state["runs"].get(session)
+        if run is not None:
+            try:
+                verdict = guided.evaluate_call(
+                    run,
+                    tool_name=tool_name,
+                    args=args,
+                    tool_call_id=kwargs.get("tool_call_id"),
+                )
+            except (core.ContractError, ValueError, TypeError, KeyError):
+                return _block("guided run state is unreadable; use /proof cancel")
+            if verdict is not None and verdict.get("action") == "block":
+                return _block(
+                    str(verdict.get("message") or "guided run blocked this call")
+                )
+        # Checked workflow authorizers take over legacy guard consumption in this
+        # phase, but guided-run procedure checks must still apply.
+        if hostport.transform_deferral_active(ctx, kwargs.get("execution_phase")):
+            return None
         cache = state["runtime"].setdefault(session, {})
         if tool_name in core.READ_ONLY_TOOLS:
             # A failed/in-flight refresh must not leave an older healthy value.
@@ -136,6 +155,20 @@ def _on_post_tool_call(ctx, tool_name, args, result, **kwargs):
         buffer.append(
             {"tool": tool_name, "args": args, "result": result, "metadata": metadata}
         )
+        run = state["runs"].get(session)
+        if run is not None:
+            try:
+                guided.note_result(
+                    run,
+                    tool_name=tool_name,
+                    args=args,
+                    result=result,
+                    metadata=metadata,
+                    tool_call_id=kwargs.get("tool_call_id"),
+                )
+            except (core.ContractError, ValueError, TypeError, KeyError):
+                # An observer error must not leave a run free to continue unchecked.
+                run["state"] = "stopped"
         if tool_name in core.READ_ONLY_TOOLS:
             cache = state["runtime"].setdefault(session, {})
             key = core.fact_key(tool_name, args)
@@ -166,10 +199,27 @@ def _on_post_tool_call(ctx, tool_name, args, result, **kwargs):
 
 
 def _clear_session(state, session):
-    for key in ("runtime", "buffers", "recorders"):
+    for key in ("runtime", "buffers", "recorders", "runs"):
         state[key].pop(session, None)
     for key in [k for k in state["pending"] if k[0] == session]:
         del state["pending"][key]
+
+
+def _on_pre_llm_call(ctx, **kwargs):
+    state = _state(ctx)
+    session = _sid(kwargs.get("session_id"))
+    with state["lock"]:
+        run = state["runs"].get(session)
+        if run is None:
+            return None
+        try:
+            text, keep = guided.notice(run)
+        except (core.ContractError, ValueError, TypeError, KeyError):
+            state["runs"].pop(session, None)
+            return None
+        if not keep:
+            state["runs"].pop(session, None)
+    return {"context": text} if text else None
 
 
 def _on_session_finalize(ctx, session_id=None, **kwargs):
@@ -192,6 +242,8 @@ def _begin(ctx, state, args, session, rebind):
     state["recorders"][session] = {"name": name, "recorder": recorder}
     state["runtime"].pop(session, None)
     state["buffers"].pop(session, None)
+    # A recording supersedes any guided run in this session.
+    state["runs"].pop(session, None)
     verb = "Rebinding" if rebind else "Recording"
     return f"{verb} '{name}'. Do the task once, then /proof stop."
 
@@ -242,7 +294,175 @@ def _learn(ctx, state, args, session):
     return f"Contract '{name}' is live (v{contract['version']}), learned from {len(calls)} calls."
 
 
+def _guided_contract(ctx, name):
+    """A saved contract that carries a procedure block, or None."""
+    if not name:
+        return None
+    try:
+        contract = core.load_contract(_contracts_root(ctx), name)
+    except (core.ContractError, OSError, ValueError, TypeError):
+        return None
+    if not isinstance(contract, dict) or not isinstance(contract.get("procedure"), dict):
+        return None
+    return contract
+
+
+def _guided_save(ctx, state, session, rest):
+    recording = state["recorders"].get(session)
+    if recording is None:
+        return (
+            "Procedure not saved: no active recording in this session. "
+            "Use /proof start <name> first."
+        )
+    try:
+        tokens = shlex.split(rest)
+    except ValueError as exc:
+        return f"Procedure not saved: the input list could not be parsed ({exc})."
+    # Validate before anything is written: a refused save keeps the recording.
+    try:
+        pairs = guided.parse_inputs(tokens)
+        snapshot = recording["recorder"].snapshot()
+        procedure = guided.build_procedure(snapshot, pairs)
+    except (guided.GuidedError, core.ContractError) as exc:
+        return f"Procedure not saved: {exc}"
+    try:
+        contract = recording["recorder"].stop(
+            success=True, bound=False, extra_fields={"procedure": procedure}
+        )
+    except (core.ContractError, OSError, ValueError, TypeError) as exc:
+        # Recorder.stop retains its snapshot when the durable write fails, so the
+        # operator can correct a transient problem and retry /proof save.
+        return f"Procedure not saved: {exc}"
+    state["recorders"].pop(session, None)
+    state["runtime"].pop(session, None)
+    state["buffers"].pop(session, None)
+    inputs = [item["name"] for item in procedure["inputs"]]
+    detail = f"Inputs: {', '.join(inputs)}." if inputs else "No inputs."
+    hint = f"/proof run {contract['contract_id']}"
+    if inputs:
+        hint += " " + " ".join(f"{name}=<value>" for name in inputs)
+    return (
+        f"Procedure '{contract['contract_id']}' saved (v{contract['version']}, unbound). "
+        f"{detail} Start it with {hint}. Nothing is gated outside a run."
+    )
+
+
+def _guided_run(ctx, state, session, rest, contract):
+    name = contract["contract_id"]
+    if session in state["recorders"]:
+        return (
+            "Run not started: this session is recording. "
+            "Use /proof stop or /proof cancel first."
+        )
+    active = state["runs"].get(session)
+    if active is not None and active.get("state") == "completed":
+        state["runs"].pop(session, None)
+        active = None
+    if active is not None:
+        return (
+            f"Run not started: a run of '{active['name']}' is already active in this "
+            "session. Use /proof cancel to end it."
+        )
+    if contract.get("bound"):
+        return (
+            f"Run not started: contract {name} is bound as a strict guard. "
+            f"Use /proof unbind {name} first."
+        )
+    try:
+        tokens = shlex.split(rest)
+    except ValueError as exc:
+        return f"Run not started: the inputs could not be parsed ({exc})."
+    try:
+        pairs = guided.parse_inputs(tokens[1:])
+        run = guided.new_run(
+            name, contract["version"], contract["procedure"], dict(pairs)
+        )
+    except (guided.GuidedError, core.ContractError) as exc:
+        return f"Run not started: {exc}"
+    state["runs"][session] = run
+    bound = ", ".join(
+        f"{key}={value}" for key, value in run["plan"]["inputs"].items()
+    )
+    return (
+        f"Run started: '{name}' step 1 of {guided.step_count(run)}"
+        + (f" with {bound}" if bound else "")
+        + ". The next message carries the guide; every action call is checked."
+    )
+
+
+def _guided_pin(ctx, rest, pin):
+    prefix = "Not pinned"
+    try:
+        tokens = shlex.split(rest) if rest else []
+    except ValueError as exc:
+        return f"{prefix}: the command arguments could not be parsed ({exc})."
+    if len(tokens) != 2:
+        verb = "pin" if pin else "unpin"
+        return f"{prefix}: use /proof {verb} <name> <tool>.<field>."
+    name, target = tokens
+    try:
+        contract = core.load_contract(_contracts_root(ctx), name)
+    except (core.ContractError, OSError, ValueError, TypeError) as exc:
+        return f"{prefix}: {exc}"
+    if contract is None:
+        return f"{prefix}: no contract named {name}."
+    if not isinstance(contract.get("procedure"), dict):
+        return f"{prefix}: {name} is not a guided procedure."
+    try:
+        guided.validate_procedure(contract["procedure"])
+    except guided.GuidedError as exc:
+        return f"{prefix}: {exc}"
+    try:
+        if pin:
+            guided.pin_field(contract, target)
+        else:
+            guided.unpin_field(contract, target)
+        core.save_contract(_contracts_root(ctx), contract, new_version=False)
+    except (guided.GuidedError, core.ContractError, OSError, ValueError, TypeError) as exc:
+        return f"{prefix}: {exc}"
+    state = "pinned" if pin else "unpinned"
+    return (
+        f"Fact {target} is {state} for procedure '{name}'. It is required before "
+        "each step that recorded it."
+    )
+
+
+def _guided_dispatch(ctx, raw_args, session):
+    """Handle the guided verbs; None falls through to the existing handlers."""
+    text = (raw_args or "").strip()
+    if not text:
+        return None
+    verb, _, rest = text.partition(" ")
+    verb = verb.strip()
+    if verb not in ("save", "pin", "unpin", "run", "inspect"):
+        return None
+    rest = rest.strip()
+    contract = None
+    if verb in ("run", "inspect"):
+        contract = _guided_contract(ctx, rest.partition(" ")[0].strip())
+        if contract is None:
+            return None
+    state = _state(ctx)
+    with state["lock"]:
+        if verb == "save":
+            return _guided_save(ctx, state, session, rest)
+        if verb == "run":
+            return _guided_run(ctx, state, session, rest, contract)
+        if verb == "inspect":
+            if contract is None:
+                return None
+            try:
+                return guided.inspect_text(contract)
+            except (guided.GuidedError, core.ContractError) as exc:
+                return f"Procedure unavailable: {exc}"
+        return _guided_pin(ctx, rest, pin=verb == "pin")
+
+
 def _handle(ctx, raw_args: str, session_id: str = "default", session_key=None, platform=None, source=None) -> str:
+    session = _sid(session_id)
+    guided_reply = _guided_dispatch(ctx, raw_args, session)
+    if guided_reply is not None:
+        return guided_reply
     new = commands.handle(
         ctx,
         raw_args,
@@ -280,14 +500,19 @@ def _handle(ctx, raw_args: str, session_id: str = "default", session_key=None, p
                 return f"Contract {name} unbound (no longer gating)."
             if cmd == "status" and len(args) == 1:
                 contracts = core.list_contracts(_contracts_root(ctx))
-                return (
-                    "\n".join(
+                lines = []
+                for c in contracts:
+                    line = (
                         f"{c['contract_id']} v{c['version']} bound={c.get('bound', False)} "
                         f"evidence={c.get('evidence_status', 'legacy')}"
-                        for c in contracts
                     )
-                    or "No contracts."
-                )
+                    if isinstance(c.get("procedure"), dict):
+                        line += " procedure"
+                    lines.append(line)
+                run = state["runs"].get(session)
+                if run is not None:
+                    lines.append(guided.status_text(run))
+                return "\n".join(lines) or "No contracts."
             return _USAGE
         except (core.ContractError, OSError, ValueError, TypeError, KeyError) as exc:
             return f"Contract not created or changed: {exc}"
@@ -297,6 +522,7 @@ def register(ctx):
     ctx._proof_run_state = {
         "lock": threading.RLock(),
         "recorders": {},
+        "runs": {},
         "runtime": {},
         "buffers": {},
         "pending": {},
@@ -314,11 +540,12 @@ def register(ctx):
             platform=platform,
             source=source,
         ),
-        description="Capture demonstrated actions, review a workflow, and run it with checked execution",
-        args_hint="start <name> | stop | capture start <name> | prepare <name> | run <name> [json] | status | unbind <name>",
+        description="Capture a task, save a guided procedure or strict guard, and reuse it on standard Hermes",
+        args_hint="start <name> | save [name=value ...] | run <name> [name=value ...] | inspect <name> | status",
     )
     ctx.register_hook("pre_tool_call", lambda **kw: _on_pre_tool_call(ctx, **kw))
     ctx.register_hook("post_tool_call", lambda **kw: _on_post_tool_call(ctx, **kw))
+    ctx.register_hook("pre_llm_call", lambda **kw: _on_pre_llm_call(ctx, **kw))
     ctx.register_hook(
         "on_session_finalize", lambda **kw: _on_session_finalize(ctx, **kw)
     )

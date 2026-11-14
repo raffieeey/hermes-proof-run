@@ -63,6 +63,10 @@ READ_ONLY_TOOLS = {
     "read_config",
     "get_status",
     "list_services",
+    "request_lookup",
+    "inventory_read",
+    "verify_fulfillment",
+    "operation_status",
 }
 
 
@@ -607,17 +611,38 @@ class Recorder:
                     "recording contains unsafe or invalid data"
                 ) from None
 
-    def stop(self, success: bool = True, bound: bool = False) -> dict:
+    def snapshot(self) -> dict:
+        """Preview the recording so far without ending it (used by guided saves)."""
         with self._lock:
             if self._active is None:
                 raise ContractError("no active recording")
-            active, self._active = self._active, None
+            active = self._active
+            return {
+                "contract_id": active["contract_id"],
+                "intent": active["intent"],
+                "count": active["count"],
+                "rejected": active["rejected"],
+                "steps": copy.deepcopy(active["steps"]),
+            }
+
+    def stop(
+        self, success: bool = True, bound: bool = False, *, extra_fields: dict | None = None
+    ) -> dict:
+        with self._lock:
+            if self._active is None:
+                raise ContractError("no active recording")
+            active = self._active
             if success is not True or active["rejected"]:
+                self._active = None
                 raise ContractError("recording contained a failed or unproven call")
             if type(bound) is not bool or not active["steps"]:
+                self._active = None
                 raise ContractError(
                     "recording has no successful mutation or invalid binding"
                 )
+            if extra_fields is not None and not isinstance(extra_fields, dict):
+                self._active = None
+                raise ContractError("extra contract fields must be an object")
             steps = active["steps"]
             contract = {
                 "schema_version": 2,
@@ -632,7 +657,13 @@ class Recorder:
                 "provenance": {"recorded_calls": active["count"]},
                 "steps": steps,
             }
-            return save_contract(self.root, contract, new_version=True)
+            if extra_fields:
+                contract.update(copy.deepcopy(extra_fields))
+            # Keep the in-memory recording until the atomic durable write succeeds.
+            # A caller can correct a transient storage failure and retry the save.
+            saved = save_contract(self.root, contract, new_version=True)
+            self._active = None
+            return saved
 
 
 # Descriptor-relative operations keep symlinks out of every component. The
