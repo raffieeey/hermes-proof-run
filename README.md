@@ -115,7 +115,7 @@ Checks apply in the run's session only.
 
 - Read-only tools are always allowed. A successful read is remembered until the next action step completes, for at most 300 seconds.
 - Tools that appear in no action step are untouched and do not clear remembered reads.
-- A call to one of the procedure's action tools must equal the next step: same tool, and arguments equal to the rendered template with JSON types preserved. Anything else is blocked, and the message names `step i of n` and shows the expected tool and arguments.
+- A call to one of the procedure's action tools must equal the next step: same tool, and arguments equal to the template rendered from the run's inputs and fresh reads, with JSON types preserved. A live read value that has not been fetched fails closed. Anything else is blocked, and the message names `step i of n` and shows the expected tool and arguments.
 - A pinned fact needs a remembered read of the rendered read arguments whose field equals the recorded value. A missing read or a different value blocks, and the message names `<tool>.<field>` and the current value. Pinning a digest field means "unchanged since recording".
 - While an allowed step is still running, a second action call is blocked.
 - A step succeeds when its result is not an error by the existing error rule (exit code, status, error fields, host metadata). Result text is not compared, so timestamps and durations do not matter and nothing is marked unproven.
@@ -124,13 +124,13 @@ Checks apply in the run's session only.
 Pinning a fact makes the follower confirm it before the step that recorded it. `/proof pin health check_service_health.status` replies `Fact check_service_health.status is pinned for procedure 'health'. It is required before each step that recorded it.`
 
 ```text
-$ terminal {"command": "./deploy.sh api 2.2.0"}
-  BLOCKED: Proof Run: guided run 'health', step 1 of 1: pinned fact check_service_health.status has no fresh read. Call check_service_health with arguments {"service": "api"} and check that status is healthy.
+$ terminal {"command": "./deploy.sh api 2.1.0"}
+  BLOCKED: Proof Run: guided run 'health', step 1 of 1: fresh read data is missing (check_service_health.version); perform the required read before this action.
 
 $ check_service_health {"service": "api"}
   -> {"status": "degraded", "version": "2.1.0"}
 
-$ terminal {"command": "./deploy.sh api 2.2.0"}
+$ terminal {"command": "./deploy.sh api 2.1.0"}
   BLOCKED: Proof Run: guided run 'health', step 1 of 1: pinned fact check_service_health.status is degraded but the procedure requires healthy. Fix the cause, or /proof cancel.
 ```
 
@@ -140,7 +140,7 @@ $ terminal {"command": "./deploy.sh api 2.2.0"}
 - The follower must reproduce each action's arguments itself. Very large arguments are a poor fit.
 - A demonstration with a failed call cannot be saved; record a clean run.
 - Inputs must appear in the recorded action arguments. A value that appears in no recorded action argument cannot become an input.
-- By default only actions are checked. Reads are suggested, not required, because one demonstration cannot tell which observed facts matter and which are noise.
+- By default only actions are checked. Reads are advisory unless pinned, except values a later action reuses from a read, which must come from a successful matching read in the same run.
 - Run state is in memory and does not survive a plugin reload. A lost run enforces nothing.
 - The strict guard and the checked-execution workflow engine are unchanged and separate.
 
@@ -295,7 +295,7 @@ python3 -m unittest discover -s benchmarks/cloud-following-pilot -p 'test_*.py' 
 python3 benchmarks/cloud-following-pilot/replay.py
 ```
 
-The plugin suite covers 176 tests: the 146 existing tests, 19 frozen guided-run acceptance tests, and 11 persistence, validation, live-binding, hook-order, input-templating, and malformed-command regression tests. The benchmark adds 10 driver tests and offline replay of 39 responses across 8 trials. These commands make no model calls. [Verification details](docs/verification.md) document the host checks and individual evidence records.
+The plugin suite covers 178 tests: the 146 existing tests, 19 frozen guided-run acceptance tests, and 13 persistence, validation, live-binding, hook-order, input-templating, and malformed-command regression tests. The benchmark adds 10 driver tests and offline replay of 39 responses across 8 trials. These commands make no model calls. [Verification details](docs/verification.md) document the host checks and individual evidence records.
 
 ## How protection works
 

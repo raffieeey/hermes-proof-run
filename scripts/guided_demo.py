@@ -199,19 +199,19 @@ def main() -> int:
             term("deployed api 2.1.0 ok"),
             "teach2",
         )
-        show("$ /proof save version=2.1.0", host.proof("save version=2.1.0", "teach2"))
+        show("$ /proof save", host.proof("save", "teach2"))
         show(
             "$ /proof pin health check_service_health.status",
             host.proof("pin health check_service_health.status", "teach2"),
         )
-        show("$ /proof run health version=2.2.0", host.proof("run health version=2.2.0", "run2"))
+        show("$ /proof run health", host.proof("run health", "run2"))
         show("--- pre_llm_call context for the follower ---", host.guide("run2"))
         run_tool(
             host,
-            'terminal {"command": "./deploy.sh api 2.2.0"}',
+            'terminal {"command": "./deploy.sh api 2.1.0"}',
             "terminal",
-            {"command": "./deploy.sh api 2.2.0"},
-            term("deployed api 2.2.0 ok"),
+            {"command": "./deploy.sh api 2.1.0"},
+            term("deployed api 2.1.0 ok"),
             "run2",
         )
         run_tool(
@@ -224,10 +224,10 @@ def main() -> int:
         )
         run_tool(
             host,
-            'terminal {"command": "./deploy.sh api 2.2.0"}',
+            'terminal {"command": "./deploy.sh api 2.1.0"}',
             "terminal",
-            {"command": "./deploy.sh api 2.2.0"},
-            term("deployed api 2.2.0 ok"),
+            {"command": "./deploy.sh api 2.1.0"},
+            term("deployed api 2.1.0 ok"),
             "run2",
         )
         run_tool(
@@ -240,10 +240,10 @@ def main() -> int:
         )
         run_tool(
             host,
-            'terminal {"command": "./deploy.sh api 2.2.0"}',
+            'terminal {"command": "./deploy.sh api 2.1.0"}',
             "terminal",
-            {"command": "./deploy.sh api 2.2.0"},
-            term("deployed api 2.2.0 ok"),
+            {"command": "./deploy.sh api 2.1.0"},
+            term("deployed api 2.1.0 ok"),
             "run2",
         )
         show("--- pre_llm_call context after the last step ---", host.guide("run2"))

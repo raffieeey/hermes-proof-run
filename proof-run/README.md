@@ -80,7 +80,7 @@ python3 -m pip install 'jsonschema>=4.18,<5'
 PYTHONPATH=. python3 -m unittest discover -s tests -v
 ```
 
-The suite has 176 tests: the 146 pre-0.3.0 tests, 19 frozen guided-run acceptance tests in `tests/test_guided_acceptance.py`, and 11 persistence, live-binding, hook-order, input-templating, validation and malformed-command regression tests across `tests/test_guided_persistence.py` and `tests/test_guided_transfer.py`. The plugin runtime has no third-party dependencies; only some schema tests use `jsonschema`.
+The suite has 178 tests: the 146 pre-0.3.0 tests, 19 frozen guided-run acceptance tests in `tests/test_guided_acceptance.py`, and 13 persistence, live-binding, hook-order, input-templating, validation and malformed-command regression tests across `tests/test_guided_persistence.py` and `tests/test_guided_transfer.py`. The plugin runtime has no third-party dependencies; only some schema tests use `jsonschema`.
 
 `scripts/guided_demo.py` in the repository root prints the transcript quoted above from a temporary data directory, with a context that offers only `register_command` and `register_hook`.
 

@@ -49,7 +49,8 @@ Inputs are validated before anything is written. For each `name=value`:
 
 - in every string in the recorded action arguments and read arguments, each occurrence of the value becomes a slot for that input;
 - a number in those arguments whose text equals the value becomes a typed slot (int or float);
-- if the value appears in no action argument, the save fails, nothing is written and the recording stays active so the operator can retry.
+- if the value appears in no action argument, the save fails, nothing is written and the recording stays active so the operator can retry;
+- if every occurrence of the value is already a live slot from a read, the input has no slot of its own and the save is refused; remove that input or record a task where the read does not supply it.
 
 Longer values are matched first. Slots are stored as structure, never as in-band markers, so recorded text such as `{{.Names}}` stays literal. Suggested encoding (internal, not part of the contract):
 

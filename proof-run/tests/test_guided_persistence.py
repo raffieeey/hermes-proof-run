@@ -7,9 +7,9 @@ from unittest.mock import patch
 
 try:
     # unittest discover -s tests imports siblings as top-level modules.
-    from test_guided_acceptance import GuidedCase, deploy, term
+    from test_guided_acceptance import GuidedCase, deploy, term, HEALTH
 except ModuleNotFoundError:
-    from tests.test_guided_acceptance import GuidedCase, deploy, term
+    from tests.test_guided_acceptance import GuidedCase, deploy, term, HEALTH
 
 
 def _loaded_core():
@@ -82,6 +82,32 @@ class GuidedPersistenceTests(GuidedCase):
         reply = self.host.proof("run deploy version=2.2.0", "run")
         self.assertTrue(reply.startswith("Run not started:"), reply)
 
+    def test_declared_input_shadowed_by_a_live_read_is_refused(self):
+        h = self.host
+        h.proof("start health", "teach")
+        self.ran("check_service_health", HEALTH, {"status": "healthy", "version": "2.1.0"}, "teach")
+        self.ran("terminal", deploy("2.1.0"), term("ok"), "teach")
+        reply = h.proof("save version=2.1.0", "teach")
+        self.assertTrue(reply.startswith("Procedure not saved:"), reply)
+        self.assertIn("already supplied by a fresh read", reply)
+        self.assertNotIn("started", h.proof("run health version=2.2.0", "run").lower())
+        self.assertIn("saved", h.proof("save", "teach").lower())
+
+    def test_malformed_contract_has_readable_guided_errors(self):
+        h = self.host
+        h.proof("start deploy", "teach")
+        self.ran("terminal", deploy("2.1.0"), term("ok"), "teach")
+        self.assertIn("saved", h.proof("save version=2.1.0", "teach").lower())
+        path = self.root / "contracts" / "deploy.json"
+        path.write_text("{broken")
+        run = h.proof("run deploy version=2.2.0", "run")
+        self.assertTrue(run.startswith("Run not started:"), run)
+        self.assertIn("unreadable or damaged", run)
+        inspect = h.proof("inspect deploy", "teach")
+        self.assertTrue(inspect.startswith("Procedure unavailable:"), inspect)
+        pin = h.proof("pin deploy terminal.command", "teach")
+        self.assertTrue(pin.startswith("Not pinned:"), pin)
+
     def test_full_inventory_reuse_uses_fresh_tokens_and_keys(self):
         h = self.host
         h.proof("start inventory fulfill", "teach")
@@ -96,9 +122,9 @@ class GuidedPersistenceTests(GuidedCase):
         }, {"committed": True}, "teach")
         self.ran("verify_fulfillment", {"request_id": "REQ-001"}, {"request_id": "REQ-001", "verified": True}, "teach")
         self.ran("finish_task", {"request_id": "REQ-001", "status": "completed"}, {"accepted": True}, "teach")
-        saved = h.proof("save sku=A1 quantity=3 request_id=REQ-001", "teach")
+        saved = h.proof("save sku=A1 request_id=REQ-001", "teach")
         self.assertIn("saved", saved.lower())
-        started = h.proof("run inventory sku=B2 quantity=4 request_id=REQ-002", "run")
+        started = h.proof("run inventory sku=B2 request_id=REQ-002", "run")
         self.assertIn("started", started.lower(), started)
         guide = h.guide("run")
         self.assertIn("request_lookup", guide)

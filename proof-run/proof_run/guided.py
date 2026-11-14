@@ -132,6 +132,21 @@ def _walk(value, path=()):
         yield list(path), value
 
 
+def _input_names(value):
+    """Input names referenced by a template."""
+    names: set[str] = set()
+    if isinstance(value, dict):
+        if value.get(_MARKER) == "input" and isinstance(value.get("name"), str):
+            names.add(value["name"])
+            return names
+        for item in value.values():
+            names.update(_input_names(item))
+    elif isinstance(value, list):
+        for item in value:
+            names.update(_input_names(item))
+    return names
+
+
 def _slot_tables(pairs, kinds):
     strings = [(demo, name) for name, demo in pairs if demo]
     numbers = {
@@ -353,6 +368,21 @@ def build_procedure(snapshot: dict, pairs) -> dict:
                     for b in used
                 ],
             }
+        )
+
+    used_inputs: set[str] = set()
+    for step in procedure_steps:
+        used_inputs.update(_input_names(step.get("args") or {}))
+        for read in step.get("reads") or []:
+            used_inputs.update(_input_names(read.get("args") or {}))
+    unused = sorted(name for name, _value in specs if name not in used_inputs)
+    if unused:
+        label = "input" if len(unused) == 1 else "inputs"
+        verb = "is" if len(unused) == 1 else "are"
+        raise GuidedError(
+            f"{label} " + ", ".join(repr(name) for name in unused)
+            + f" {verb} already supplied by a fresh read and has no input slot; "
+            "remove it or record a task where that value is not read"
         )
 
     return {

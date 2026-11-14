@@ -6,11 +6,11 @@ Guided runs: record a task once, save it as a procedure with named inputs, and r
 
 ### Added
 
-- `/proof save [name=value ...]` turns the session's recording into an unbound schema-2 contract with a `procedure` block. Inputs are validated before anything is written; a refused save keeps the recording active.
+- `/proof save [name=value ...]` turns the session's recording into an unbound schema-2 contract with a `procedure` block. Inputs are validated before anything is written; a refused save keeps the recording active. A declared input that no step can use because a fresh read supplies the same value is refused rather than stored as a dead input.
 - `/proof run <name> [name=value ...]` binds new input values and starts one run per session. A name with no procedure falls through to the existing workflow `run`.
 - `/proof inspect <name>` lists steps, inputs and pinnable read facts; `/proof pin` and `/proof unpin` make a recorded read fact a required precondition. A damaged procedure refuses inspection, pinning and running with a readable error.
 - `pre_llm_call` returns the guide text for the run's session only. `pre_tool_call` checks the run before the strict guard, `post_tool_call` reports step outcomes, and `on_session_finalize` and `/proof cancel` clear the run.
-- `tests/test_guided_acceptance.py` (19 tests) is the frozen contract for guided runs; `tests/test_guided_persistence.py` and `tests/test_guided_transfer.py` add eleven persistence, live-binding, hook-order, input-templating, validation and malformed-command regression tests. The plugin suite is 176 tests.
+- `tests/test_guided_acceptance.py` (19 tests) is the frozen contract for guided runs; `tests/test_guided_persistence.py` and `tests/test_guided_transfer.py` add thirteen persistence, live-binding, hook-order, input-templating, validation and malformed-command regression tests. The plugin suite is 178 tests.
 
 ### Changed
 

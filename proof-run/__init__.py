@@ -300,8 +300,8 @@ def _guided_contract(ctx, name):
         return None
     try:
         contract = core.load_contract(_contracts_root(ctx), name)
-    except (core.ContractError, OSError, ValueError, TypeError):
-        return None
+    except (core.ContractError, OSError, ValueError, TypeError) as exc:
+        raise core.ContractError(f"contract {name} is unreadable or damaged") from exc
     if not isinstance(contract, dict) or not isinstance(contract.get("procedure"), dict):
         return None
     return contract
@@ -439,7 +439,13 @@ def _guided_dispatch(ctx, raw_args, session):
     rest = rest.strip()
     contract = None
     if verb in ("run", "inspect"):
-        contract = _guided_contract(ctx, rest.partition(" ")[0].strip())
+        name = rest.partition(" ")[0].strip()
+        try:
+            contract = _guided_contract(ctx, name)
+        except (core.ContractError, OSError, ValueError, TypeError) as exc:
+            if verb == "run":
+                return f"Run not started: {exc}"
+            return f"Procedure unavailable: {exc}"
         if contract is None:
             return None
     state = _state(ctx)

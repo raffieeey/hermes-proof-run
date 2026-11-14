@@ -19,7 +19,7 @@ class GuidedTransferTests(GuidedCase):
         self.assertIn("input name", reply)
         self.assertIn("request_id", reply)
         self.assertNotIn("started", h.proof("run reserve sku=B2 quantity=3", "run").lower())
-        good = h.proof("save sku=A1 quantity=3 request_id=REQ-001", "teach")
+        good = h.proof("save sku=A1 request_id=REQ-001", "teach")
         self.assertIn("saved", good.lower())
 
     def test_bound_value_cannot_change_recorded_quantity_inside_a_command(self):
