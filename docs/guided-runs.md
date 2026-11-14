@@ -1,6 +1,6 @@
 # Guided runs
 
-Status: design for v0.3.0. The executable contract is `proof-run/tests/test_guided_acceptance.py`.
+Status: implemented in v0.3.0. The executable contract is `proof-run/tests/test_guided_acceptance.py`; the implementation is `proof_run/guided.py` and `proof_run/bindings.py`.
 
 ## Problem
 
