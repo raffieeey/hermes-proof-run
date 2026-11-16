@@ -1,10 +1,15 @@
 # Changelog
 
-## [Unreleased]
+## [0.3.1] - 2026-11-16
 
 ### Changed
 
 - Guided runs write an atomic per-session marker under the existing contracts storage root. A plugin reload re-arms an unexpired marker as a stopped-and-held run; its action tools remain blocked until `/proof cancel`, and expired markers are discarded after 24 hours.
+- If a live guided run's in-memory state is unreadable, every effectful tool in that session is blocked until `/proof cancel`; read-only tools remain available.
+
+### Verification
+
+- 2026-11-16: 187 plugin tests, 10 benchmark tests, and offline replay of 39 responses across 8 trials passed. The real-host verifier passed 25/25 probes with zero network attempts using Hermes-managed Python 3.14.9 and the provisioned host checkout; the detailed receipt is `docs/host-verification-2026-11-16.json`.
 
 ## [0.3.0] - 2026-11-14
 

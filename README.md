@@ -4,30 +4,32 @@
 
 Proof Run records the checks and actions of a successful Hermes task, makes the procedure inspectable, and checks covered actions when you reuse it.
 
-**v0.3.0** · Hermes Agent plugin · MIT
+**v0.3.1** · Hermes Agent plugin · MIT
 
 https://github.com/user-attachments/assets/a712c878-fc68-471e-ae21-008ff673e3de
 
 *Product overview. Unmute the player for audio.* [Download the video](https://github.com/raffieeey/hermes-proof-run/releases/download/v0.2.0/proof-run-overview.mp4)
 
-## What's new in v0.3.0
+## What's new in v0.3.1
 
 - **Guided runs:** record a task once, `/proof save` it as a procedure with named inputs, then `/proof run` it on new values. The follower is told the steps before it acts and each action call is checked.
-- **New commands:** `/proof save`, `/proof pin` and `/proof unpin`. `/proof run` and `/proof inspect` now also handle a saved procedure.
-- **New `pre_llm_call` hook:** the guide text is delivered through the standard hook, with no host patch and no model or network call by the plugin.
+- **Interrupted runs stay held:** a plugin reload re-arms an unexpired guided run as stopped, blocking its action tools until `/proof cancel`.
+- **Unreadable run state fails closed:** every effectful tool in that session is blocked until `/proof cancel`; read-only tools remain available.
+- **New commands:** `/proof save`, `/proof pin` and `/proof unpin`. `/proof run` and `/proof inspect` also handle saved procedures.
+- The guide uses the standard `pre_llm_call` hook, with no host patch and no model or network call by the plugin.
 - Strict guard mode and checked-execution workflows are unchanged and separate.
 
-See the [release notes](CHANGELOG.md#030---2026-11-14) for the full change list.
+See the [release notes](CHANGELOG.md#031---2026-11-16) for the full change list.
 
 ## Get started
 
-Use Hermes Agent on a Linux/POSIX host with Python 3.11 or newer. Install from `main`:
+Use Hermes Agent on a Linux/POSIX host with Python 3.11 or newer. Once this preparation is merged, install from `main`:
 
 ```sh
 hermes plugins install raffieeey/hermes-proof-run/proof-run --ref main --enable
 ```
 
-v0.3.0 is on `main` and not yet tagged, and the Hermes catalog entry still pins v0.1.0, which has none of these commands.
+v0.3.1 is prepared on the local `release/0.3.1-prep` branch. It has not been tagged or published. The Hermes catalog entry still pins v0.1.0, which has none of these commands.
 
 Publishing a release does not update an already-installed plugin or running gateway automatically. Workflow execution also needs the [supported host setup](docs/host-integration.md).
 
@@ -295,7 +297,7 @@ python3 -m unittest discover -s benchmarks/cloud-following-pilot -p 'test_*.py' 
 python3 benchmarks/cloud-following-pilot/replay.py
 ```
 
-The plugin suite covers 178 tests: the 146 existing tests, 19 frozen guided-run acceptance tests, and 13 persistence, validation, live-binding, hook-order, input-templating, and malformed-command regression tests. The benchmark adds 10 driver tests and offline replay of 39 responses across 8 trials. These commands make no model calls. [Verification details](docs/verification.md) document the host checks and individual evidence records.
+The plugin suite covers 187 tests: 146 existing tests, 19 frozen guided-run acceptance tests, 13 persistence, validation, live-binding, hook-order, input-templating, and malformed-command regression tests, and 9 durability and fail-closed regression tests. The benchmark adds 10 driver tests and offline replay of 39 responses across 8 trials. These commands make no model calls. [Verification details](docs/verification.md) document the host checks and individual evidence records.
 
 ## How protection works
 
