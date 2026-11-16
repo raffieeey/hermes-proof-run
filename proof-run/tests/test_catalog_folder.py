@@ -63,7 +63,8 @@ class CatalogFolderTests(unittest.TestCase):
         if version_line is None:
             self.fail("README's first version line is missing")
         self.assertEqual(version_match.group(1), version_line.removeprefix("v").removesuffix("."))
-        self.assertIsNone(re.search(r"(?m)^\s*provides_tools\s*:", manifest))
+        # The manifest may declare an explicit empty tool list; it must not promise tools.
+        self.assertRegex(manifest, r"(?m)^provides_tools:\s*\[\]\s*$")
 
     def test_readme_opening_has_example_and_verification_evidence(self):
         readme = (PLUGIN_ROOT / "README.md").read_text(encoding="utf-8")
