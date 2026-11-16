@@ -4,12 +4,12 @@
 
 ### Changed
 
-- Guided runs write an atomic per-session marker under the existing contracts storage root. A plugin reload re-arms an unexpired marker as a stopped-and-held run; its action tools remain blocked until `/proof cancel`, and expired markers are discarded after 24 hours. A marker that is not JSON is discarded; any other marker that cannot be re-armed fails closed and is kept. A valid marker with an unsupported schema version holds its own session; an unreadable marker directory or marker, or a marker that cannot be validated, holds every session. Effectful tools stay blocked until `/proof cancel`, read-only tools stay available, and `/proof status` reports the hold.
+- Guided runs write an atomic per-session marker under the existing contracts storage root. A plugin reload re-arms an unexpired marker as a stopped-and-held run; its action tools remain blocked until `/proof cancel`, and expired markers are discarded after 24 hours. No marker that cannot be re-armed is deleted; it fails closed and is kept. A marker that is valid JSON with an invalid field, including an unsupported schema version, holds its own session when it names one readably and its filename agrees; a marker that is not JSON, one that names no usable session, and an unreadable marker directory or marker hold every session. Effectful tools stay blocked until `/proof cancel`, read-only tools stay available, and `/proof status` reports the hold.
 - A live guided run's structure is validated before the "tool is not in the plan" shortcut. If the run is not a mapping, its plan, steps or tool list is missing, empty or mistyped, its step index is outside the plan, or the plan's tool list disagrees with its steps, every effectful tool in that session is blocked until `/proof cancel`; read-only tools remain available. `/proof status` reports the unreadable run.
 
 ### Verification
 
-- At release-preparation commit `9de5f4e` (2026-11-16), 187 plugin behaviour tests, 10 benchmark tests, and offline replay of 39 responses across 8 trials passed. The suite has since grown to 211 tests: 206 plugin behaviour tests and 5 catalog-folder checks. The real-host verifier passed 25/25 probes with zero network attempts; the detailed receipt is `docs/host-verification-2026-11-16.json`.
+- At release-preparation commit `9de5f4e` (2026-11-16), 187 plugin behaviour tests, 10 benchmark tests, and offline replay of 39 responses across 8 trials passed. The suite has since grown to 214 tests: 209 plugin behaviour tests and 5 catalog-folder checks. The real-host verifier passed 25/25 probes with zero network attempts; the detailed receipt is `docs/host-verification-2026-11-16.json`.
 
 ## [0.3.0] - 2026-11-14
 

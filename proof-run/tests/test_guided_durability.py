@@ -105,14 +105,50 @@ class GuidedDurabilityTests(GuidedCase):
         self.assertFalse(marker_path.exists())
         self.assertEqual(self._marker_paths(), [])
 
-    def test_corrupt_marker_is_dropped_without_blocking_unrelated_tool(self):
+    def test_valid_marker_rearms_its_own_session_without_a_global_hold(self):
+        # Positive control for the unparseable-marker hold: the same marker, intact,
+        # re-arms only its own run and holds nothing else.
         marker_path = self._start_run()
-        marker_path.write_text("{not valid json")
+        kept = marker_path.read_bytes()
         self.host = StockHost(self.root)
+        self._assert_kept(marker_path, kept)
+        self.assertIn("interrupted", self.blocked("terminal", deploy("2.2.0"), term("ok"), "run").lower())
         self.ran("write_file", {"path": "/tmp/unrelated", "content": "ok"}, {"bytes_written": 2}, "run")
-        self.assertFalse(marker_path.exists())
-        status = self.host.proof("status", "run")
-        self.assertNotIn("run deploy", status.lower())
+        self.ran("terminal", {"command": "ls"}, term("ok"), "other")
+        self.ran("write_file", {"path": "/tmp/unrelated", "content": "ok"}, {"bytes_written": 2}, "other")
+        self.assertNotIn("hold", self.host.proof("status", "other").lower())
+
+    def test_unparseable_marker_holds_until_cancel(self):
+        marker_path = self._start_run()
+        for label, payload in (
+            ("truncated json", b"{not valid json"),
+            ("empty file", b""),
+            ("not utf-8", b"\xff\xfe\x00{"),
+            ("nested past the parser limit", b"[" * 50000),
+        ):
+            with self.subTest(case=label):
+                marker_path.write_bytes(payload)
+                self.host = StockHost(self.root)
+                # Loading keeps the file: it is evidence, not litter.
+                self._assert_kept(marker_path, payload)
+                # No session can be named from it, so every session is held.
+                self._assert_effectful_blocked("run", scope="every session")
+                self._assert_effectful_blocked("other", scope="every session")
+                status = self.host.proof("status", "other")
+                self.assertIn("hold", status.lower())
+                self.assertIn("/proof cancel", status)
+                # /proof cancel releases the hold and leaves the file where it is.
+                self.assertIn("cancelled", self.host.proof("cancel", "other").lower())
+                self._assert_kept(marker_path, payload)
+                self.ran("terminal", {"command": "ls"}, term("ok"), "run")
+                self.ran("terminal", {"command": "ls"}, term("ok"), "other")
+                self.assertNotIn("hold", self.host.proof("status", "other").lower())
+                # The file is still there, so a reload holds again until it is removed.
+                self.host = StockHost(self.root)
+                self._assert_effectful_blocked("other", scope="every session")
+                marker_path.unlink()
+                self.host = StockHost(self.root)
+                self.ran("terminal", {"command": "ls"}, term("ok"), "other")
 
     def test_expired_marker_is_removed_without_rearming(self):
         marker_path = self._start_run()
@@ -252,14 +288,11 @@ class GuidedDurabilityTests(GuidedCase):
                 # The kept marker is not ours to remove from another session's cancel.
                 self._assert_kept(marker_path, kept)
 
-    def test_marker_that_cannot_be_validated_holds_every_session_and_is_kept(self):
+    def test_marker_that_names_no_session_holds_every_session_and_is_kept(self):
         marker_path = self._start_run()
         good = marker_path.read_bytes()
         oversize = b"{" + b" " * (64 * 1024) + b"}"
         for label, payload in (
-            ("step index outside the actions", lambda m: dict(m, step_index=5)),
-            ("empty action tools", lambda m: dict(m, action_tools=[])),
-            ("invalid procedure name", lambda m: dict(m, procedure_name="not a name!")),
             ("not an object", lambda m: ["schema_version", 1]),
             ("oversize", lambda m: oversize),
         ):
@@ -275,6 +308,61 @@ class GuidedDurabilityTests(GuidedCase):
                 self.assertIn("hold", self.host.proof("status", "run").lower())
                 self.assertIn("cancelled", self.host.proof("cancel", "other").lower())
                 self.ran("terminal", {"command": "ls"}, term("ok"), "other")
+
+    def test_invalid_field_with_a_valid_session_id_holds_only_that_session(self):
+        marker_path = self._start_run()
+        good = marker_path.read_bytes()
+        for label, changes in (
+            ("step index outside the actions", {"step_index": 5}),
+            ("negative step index", {"step_index": -1}),
+            ("empty action tools", {"action_tools": []}),
+            ("read-only action tool", {"action_tools": ["read_file"]}),
+            ("invalid procedure name", {"procedure_name": "not a name!"}),
+            ("invalid contract version", {"contract_version": 0}),
+            ("invalid timestamp", {"updated_at": "yesterday"}),
+        ):
+            with self.subTest(case=label):
+                marker_path.write_bytes(good)
+                kept = self._rewrite_marker(marker_path, **changes)
+                self.host = StockHost(self.root)
+                self._assert_kept(marker_path, kept)
+                self._assert_effectful_blocked("run", scope="this session")
+                # A second session is untouched: effectful tools still run.
+                self.ran("terminal", {"command": "ls"}, term("ok"), "other")
+                self.ran("write_file", {"path": "/tmp/unrelated", "content": "ok"}, {"bytes_written": 2}, "other")
+                self.assertIn("hold", self.host.proof("status", "run").lower())
+                self.assertNotIn("hold", self.host.proof("status", "other").lower())
+                # Another session's cancel does not release this session's hold.
+                self.assertIn("cancelled", self.host.proof("cancel", "other").lower())
+                self._assert_effectful_blocked("run", scope="this session")
+                self._assert_kept(marker_path, kept)
+                self.assertIn("cancelled", self.host.proof("cancel", "run").lower())
+                self.assertFalse(marker_path.exists())
+                self.ran("terminal", {"command": "ls"}, term("ok"), "run")
+
+    def test_marker_whose_session_cannot_be_trusted_holds_every_session(self):
+        marker_path = self._start_run()
+        good = marker_path.read_bytes()
+        for label, changes in (
+            ("session missing", {"session_id": _GONE}),
+            ("session empty", {"session_id": ""}),
+            ("session not text", {"session_id": 7}),
+            ("session too long", {"session_id": "s" * 1025}),
+            # Valid text, but the file is not the one that session's marker would use.
+            ("filename does not match the session", {"session_id": "someone-else"}),
+        ):
+            with self.subTest(case=label):
+                marker_path.write_bytes(good)
+                kept = self._rewrite_marker(marker_path, **changes)
+                self.host = StockHost(self.root)
+                self._assert_kept(marker_path, kept)
+                self._assert_effectful_blocked("run", scope="every session")
+                self._assert_effectful_blocked("other", scope="every session")
+                self.assertIn("hold", self.host.proof("status", "other").lower())
+                self.assertIn("cancelled", self.host.proof("cancel", "other").lower())
+                self.ran("terminal", {"command": "ls"}, term("ok"), "run")
+                self.ran("terminal", {"command": "ls"}, term("ok"), "other")
+                self._assert_kept(marker_path, kept)
 
     def test_unreadable_marker_directory_holds_every_session(self):
         self._skip_if_permissions_do_not_bind()

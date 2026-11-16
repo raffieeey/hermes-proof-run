@@ -147,34 +147,36 @@ def _why(exc):
 def _validate_run_marker(marker, filename):
     if not isinstance(marker, dict):
         raise _MarkerHold("marker is not an object")
+    # A hold names the marker's own session whenever that session is readable, so a
+    # bad field costs one session. Without a readable session, or when the filename
+    # contradicts it, nothing says whose marker this is and every session is held.
+    session = _marker_session(marker)
     version_field = marker.get("schema_version")
     if type(version_field) is not int or version_field != _GUIDED_MARKER_SCHEMA:
         # A newer plugin version may own this marker: hold its session, keep the file.
         raise _MarkerHold(
-            f"unsupported marker schema version {_shown(version_field)}",
-            _marker_session(marker),
+            f"unsupported marker schema version {_shown(version_field)}", session
         )
-    raw_name = marker.get("procedure_name")
-    if not isinstance(raw_name, str):
-        raise _MarkerHold("invalid procedure name")
-    try:
-        name = core._validate_contract_name(raw_name)
-    except core.ContractError:
-        raise _MarkerHold("invalid procedure name") from None
-    version = marker.get("contract_version")
-    if type(version) is not int or version < 1:
-        raise _MarkerHold("invalid contract version")
-    session = marker.get("session_id")
-    if not isinstance(session, str) or not session or len(session) > 1024:
+    if session is None:
         raise _MarkerHold("invalid session id")
     if filename != _marker_filename(session):
         raise _MarkerHold("marker filename does not match session")
+    raw_name = marker.get("procedure_name")
+    if not isinstance(raw_name, str):
+        raise _MarkerHold("invalid procedure name", session)
+    try:
+        name = core._validate_contract_name(raw_name)
+    except core.ContractError:
+        raise _MarkerHold("invalid procedure name", session) from None
+    version = marker.get("contract_version")
+    if type(version) is not int or version < 1:
+        raise _MarkerHold("invalid contract version", session)
     index = marker.get("step_index")
     if type(index) is not int or index < 0:
-        raise _MarkerHold("invalid step index")
+        raise _MarkerHold("invalid step index", session)
     tools = marker.get("action_tools")
     if not isinstance(tools, list) or not tools or len(tools) > 256:
-        raise _MarkerHold("invalid action tool list")
+        raise _MarkerHold("invalid action tool list", session)
     if any(
         not isinstance(tool, str)
         or not tool.strip()
@@ -183,15 +185,15 @@ def _validate_run_marker(marker, filename):
         or tool in core.READ_ONLY_TOOLS
         for tool in tools
     ):
-        raise _MarkerHold("invalid action tool name")
+        raise _MarkerHold("invalid action tool name", session)
     if index >= len(tools):
-        raise _MarkerHold("step index is outside the action sequence")
+        raise _MarkerHold("step index is outside the action sequence", session)
     updated_at = marker.get("updated_at")
     if isinstance(updated_at, bool) or not isinstance(updated_at, (int, float)):
-        raise _MarkerHold("invalid marker timestamp")
+        raise _MarkerHold("invalid marker timestamp", session)
     updated_at = float(updated_at)
     if not math.isfinite(updated_at):
-        raise _MarkerHold("invalid marker timestamp")
+        raise _MarkerHold("invalid marker timestamp", session)
     return {
         "name": name,
         "version": version,
@@ -291,8 +293,9 @@ def _scan_run_markers(root, state):
             try:
                 data = json.loads(raw.decode("utf-8"))
             except (UnicodeError, ValueError, RecursionError):
-                # Not JSON at all: nothing in it can name a run, so it is discarded.
-                _drop_run_marker(directory, filename)
+                # Not JSON at all: nothing says which tools a run covered, so the
+                # file is kept as evidence and every session is held.
+                _hold_everything(state, f"{label} is not valid JSON")
                 continue
             try:
                 marker = _validate_run_marker(data, filename)
@@ -331,10 +334,11 @@ def _scan_run_markers(root, state):
 def _load_run_markers(root, state):
     """Re-arm fresh markers as stopped runs, and fail closed on what cannot be.
 
-    Discarded: text that is not JSON, and valid markers older than 24 hours. Kept,
-    never deleted: a valid JSON marker with an unsupported schema holds its own
-    session (when it names one), and an unreadable directory or marker, or one that
-    cannot be validated, holds every session. /proof cancel releases a hold.
+    Discarded: valid markers older than 24 hours. Kept, never deleted: a marker
+    that is valid JSON with an invalid field holds its own session when it names
+    one readably (and its filename agrees); text that is not JSON, a marker that
+    names no usable session, and an unreadable directory or marker hold every
+    session. /proof cancel releases a hold.
     """
     try:
         _scan_run_markers(root, state)
