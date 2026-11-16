@@ -1,6 +1,6 @@
 # Claims audit
 
-Checked against the tree at `6e35f7b` plus the documentation edits in this branch. `ok` means evidence was found; `fixed` means the text was corrected or qualified; `unproven` means the limitation remains explicit.
+Checked against the tree at `6e35f7b` plus the documentation edits and fail-closed fixes in this branch. `ok` means evidence was found; `fixed` means the text was corrected or qualified; `unproven` means the limitation remains explicit.
 
 | Where | Checkable claim | Evidence | Status |
 |---|---|---|---|
@@ -14,9 +14,10 @@ Checked against the tree at `6e35f7b` plus the documentation edits in this branc
 | `README.md:118-124`; `docs/guided-runs.md:76-85` | Read freshness is 300 seconds; strict-guard observations use 60 seconds; blocked-attempt limit is five. | `guided.FACT_MAX_AGE`, `guided.MAX_BLOCKS`, `__init__._FACT_MAX_AGE`; tests | ok |
 | `README.md:146`; `CHANGELOG.md:7-8`; `proof-run/README.md:94`; `docs/safety.md:8` | Reload handling and marker expiry. | `_write_run_marker`, `_load_run_markers` in `proof-run/__init__.py`; `guided.py` | fixed |
 | `docs/safety.md:8`; `docs/guided-runs.md:70` | Full run state is not restored; only recovery metadata persists and reload re-arms a held run. | Marker schema/load code in `proof-run/__init__.py`; durability tests | fixed |
+| `CHANGELOG.md:7-8`; `docs/guided-runs.md:70,103-105`; `docs/safety.md:8`; `README.md:146`; `proof-run/README.md:94` | A malformed live run, an unsupported-schema marker, and an unreadable marker or marker directory block effectful tools until `/proof cancel` instead of letting them through. | `guided.validate_run`, `_validate_run_marker`, `_load_run_markers` in `proof-run/`; `tests/test_guided_malformed_state.py`, `tests/test_guided_durability.py` | fixed |
 | `docs/guided-runs.md:120-127`; `README.md:280-287`; `CHANGELOG.md:35` | Live guided check reports 4/4 guided and 3/3 baseline; report has no harness/transcripts, so execution provenance and fresh-read details are not independently checkable. | `benchmarks/live-guided/results.json`; benchmark README states harness is not committed | unproven |
 | `docs/guided-runs.md:122-127` | Follower-run count is seven, not six. | 4 guided + 3 unguided in `results.json` | fixed |
-| `README.md:300`; `proof-run/README.md:17`; `CHANGELOG.md:12`; `docs/verification.md:5-19,50` | Current plugin suite has 192 tests; the v0.3.1 preparation tree had 187, with five later catalog-folder tests. | Required unittest command; AST-counted tests at `9de5f4e` and current tree; 192-test run | fixed |
+| `README.md:300`; `proof-run/README.md:17`; `CHANGELOG.md:12`; `docs/verification.md:5-19,50` | The suite has 211 tests: 206 plugin behaviour tests and 5 catalog-folder checks. `9de5f4e` had 187 (all behaviour) and `6e35f7b` had 192 (187 plus 5); the later 19 are fail-closed regression tests. | Required unittest command (211-test run); AST-counted test methods at `9de5f4e` (187), `6e35f7b` (187 + 5) and the current tree (206 + 5); `tests/test_catalog_folder.py` asserts the split | fixed |
 | `CHANGELOG.md:24`; `docs/verification.md:42-50`; `docs/tdd-implementation.md:16` | Historical v0.3.0/v0.2.0 test counts are version-scoped, not current counts. | AST counts at `0c17e71` (178) and `v0.2.0` commit (146) | ok |
 | `README.md:291-300`; `CHANGELOG.md:12`; `docs/verification.md:5-21` | Benchmark has 10 tests; offline replay checks 39 responses across 8 trials without inference. | Benchmark unittest command and `replay.py`; observed `OFFLINE_REPLAY_OK` | ok |
 | `README.md:267-276`; `CHANGELOG.md:60`; `docs/verification.md:68-88` | Cloud pilot completion, reserve, token and call totals match its stored traces. | `benchmarks/cloud-following-pilot` raw data, tests and offline replay | ok |

@@ -1,6 +1,7 @@
 """Keep the catalog-installed folder self-contained."""
 from __future__ import annotations
 
+import ast
 import re
 import unittest
 from pathlib import Path
@@ -10,6 +11,31 @@ PLUGIN_ROOT = Path(__file__).resolve().parents[1]
 REPOSITORY_ROOT = PLUGIN_ROOT.parent
 INLINE_LINK = re.compile(r"\]\(\s*(<[^>]+>|[^)\s]+)")
 REFERENCE_LINK = re.compile(r"(?m)^\s*\[[^\]]+\]:\s*(<[^>\s]+>|[^\s]+)")
+
+
+SPLIT_STATEMENT = re.compile(
+    r"(\d+) tests: (\d+) plugin behaviour tests and (\d+) catalog-folder checks"
+)
+
+
+def suite_split() -> tuple[int, int]:
+    """Count test methods: (plugin behaviour tests, catalog-folder checks)."""
+    behaviour = catalog = 0
+    for path in sorted((PLUGIN_ROOT / "tests").glob("test_*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        count = sum(
+            1
+            for node in ast.walk(tree)
+            if isinstance(node, ast.ClassDef)
+            for item in node.body
+            if isinstance(item, (ast.FunctionDef, ast.AsyncFunctionDef))
+            and item.name.startswith("test")
+        )
+        if path.name == Path(__file__).name:
+            catalog += count
+        else:
+            behaviour += count
+    return behaviour, catalog
 
 
 def markdown_targets(markdown: str) -> list[str]:
@@ -70,8 +96,36 @@ class CatalogFolderTests(unittest.TestCase):
         readme = (PLUGIN_ROOT / "README.md").read_text(encoding="utf-8")
         opening = "\n".join(readme.splitlines()[:20])
         self.assertIn("/proof start deploy", opening)
-        self.assertIn("The suite has 187 tests", opening)
+        behaviour, catalog = suite_split()
+        self.assertIn(
+            f"The suite has {behaviour + catalog} tests: {behaviour} plugin behaviour "
+            f"tests and {catalog} catalog-folder checks.",
+            opening,
+        )
         self.assertIn("host-verification-2026-11-16.json", opening)
+        self.assert_documented_splits_match_the_test_files()
+
+    def assert_documented_splits_match_the_test_files(self):
+        # A helper, not a test: the catalog-folder checks are counted by method name.
+        behaviour, catalog = suite_split()
+        expected = (behaviour + catalog, behaviour, catalog)
+        documents = [PLUGIN_ROOT / "README.md"] + [
+            REPOSITORY_ROOT / name
+            for name in ("README.md", "CHANGELOG.md", "docs/verification.md")
+            if (REPOSITORY_ROOT / name).is_file()
+        ]
+        for document in documents:
+            found = [
+                tuple(int(part) for part in match.groups())
+                for match in SPLIT_STATEMENT.finditer(document.read_text(encoding="utf-8"))
+            ]
+            label = str(document.relative_to(REPOSITORY_ROOT))
+            self.assertTrue(found, f"{label} does not state the suite split")
+            self.assertEqual(
+                [item for item in found if item != expected],
+                [],
+                f"{label} states a suite split that differs from {expected} in the test files",
+            )
 
     def test_readme_documents_interrupted_run_cancel_and_no_live_test_claim(self):
         readme = (PLUGIN_ROOT / "README.md").read_text(encoding="utf-8")
