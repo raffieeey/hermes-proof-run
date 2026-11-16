@@ -4,7 +4,7 @@ Guarded repeats (`/proof start`, `/proof stop`, `/proof rebind`) use the standar
 
 ## Set up the workflow host
 
-The supported source build is Hermes `67664e236ddcc45824b871d575677287599af152` with [`integration/hermes-checked-execution.patch`](../integration/hermes-checked-execution.patch). The patch preserves normal tool checks and approvals while providing trusted execution identity, final authorization and execution receipts to the plugin.
+The workflow integration target is Hermes `67664e236ddcc45824b871d575677287599af152` with [`integration/hermes-checked-execution.patch`](../integration/hermes-checked-execution.patch). The patch is intended to preserve normal tool checks and approvals while providing trusted execution identity, final authorization and execution receipts to the plugin. Verify the exact checkout with the documented `git apply --check` before applying it; the repository does not retain the raw test logs for the earlier patched-host test totals.
 
 Start from a clean Hermes source installation. From your Proof Run clone:
 
@@ -19,7 +19,7 @@ git -C "$HERMES_SOURCE" switch -c proof-run-v0.2.0 67664e236ddcc45824b871d575677
 git -C "$HERMES_SOURCE" apply --check "$PROOF_RUN_DIR/integration/hermes-checked-execution.patch"
 git -C "$HERMES_SOURCE" apply "$PROOF_RUN_DIR/integration/hermes-checked-execution.patch"
 
-hermes plugins install raffieeey/hermes-proof-run/proof-run --ref v0.2.0 --enable
+hermes plugins install raffieeey/hermes-proof-run/proof-run --ref 1ecab999a27c5b8ce0b6d8cf26ec6a9e4fa689b4 --enable
 ```
 
 The clean-tree check preserves existing customizations rather than overwriting them. Keep an existing customized installation on its own branch and prepare a separate clean source checkout if needed. Hermes' standard source installer and managed-runtime process are documented in the [official installation guide](https://hermes-agent.nousresearch.com/docs/getting-started/installation).

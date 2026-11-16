@@ -7,6 +7,7 @@ description: "Proof Run records a successful Hermes task at the tool boundary an
 maintainer: raffieeey
 tier: community
 category: automation
+# Inherited from the upstream entry; this audit did not test the declared minimum.
 requires_hermes: ">=0.21.0"
 version: "0.3.1"
 platforms: [linux]

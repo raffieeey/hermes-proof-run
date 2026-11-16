@@ -9,7 +9,7 @@
 
 ### Verification
 
-- 2026-11-16: 187 plugin tests, 10 benchmark tests, and offline replay of 39 responses across 8 trials passed. The real-host verifier passed 25/25 probes with zero network attempts using Hermes-managed Python 3.14.9 and the provisioned host checkout; the detailed receipt is `docs/host-verification-2026-11-16.json`.
+- At release-preparation commit `9de5f4e` (2026-11-16), 187 plugin tests, 10 benchmark tests, and offline replay of 39 responses across 8 trials passed. The current tree adds 5 catalog-folder tests and has 192 plugin tests. The real-host verifier passed 25/25 probes with zero network attempts; the detailed receipt is `docs/host-verification-2026-11-16.json`.
 
 ## [0.3.0] - 2026-11-14
 
@@ -32,13 +32,13 @@ Guided runs: record a task once, save it as a procedure with named inputs, and r
 
 - Strict guard mode and the checked-execution workflow engine are unchanged. `/proof stop`, `learn`, `rebind`, `unbind` and every workflow command keep their v0.2.0 behaviour.
 - Guided runs need no host patch, make no model or network call, and were process-local in v0.3.0. The Unreleased durability change re-arms runs as stopped and held after reload.
-- Live check: one glm-5.3 teacher through the configured provider saved a five-tool inventory procedure; four glm-5.3-flash guided runs on a new request all passed, and three unguided baseline runs also passed. This is a small single-task sample, not a performance or savings claim.
+- The retained aggregate in `benchmarks/live-guided/results.json` reports one glm-5.3 teacher run, four glm-5.3-flash guided runs on a new request, and three unguided baseline runs passing. The harness and per-run transcripts are not retained, so those live execution details are reported results rather than independently reproducible evidence. This is a small single-task sample, not a performance or savings claim.
 
 ## 0.2.0 - 2026-11-12
 
 Teach a procedure with a frontier model, then reuse it with a cheaper follower under reviewed guardrails. There is no student parameter-count requirement.
 
-This tag does not change an already-installed plugin or a running gateway. There is no catalog repin and no upstream Hermes pull request.
+This tag does not change an already-installed plugin or a running gateway. The upstream catalog entry still targets v0.1.0; no catalog repin for v0.2.0 was made.
 
 ### Added
 
@@ -54,7 +54,7 @@ This tag does not change an already-installed plugin or a running gateway. There
 
 ### Compatibility and validation
 
-- The supported host build is Hermes `67664e236ddcc45824b871d575677287599af152` with the bundled checked-execution patch. Verification passed 184 host/plugin/conformance tests, 26 hosted-scope denial tests and the full registered-command workflow example.
+- The version-pinned host target is Hermes `67664e236ddcc45824b871d575677287599af152` with the bundled checked-execution patch. Release-era notes report 184 host/plugin/conformance tests, 26 hosted-scope denial tests and a registered-command journey, but the repository does not retain raw test output for those results; see [verification notes](docs/verification.md).
 - Operator demos (`scripts/demo_runner.py` and the default mock path) are scripted teachers, not frontier demonstrations.
 - Legacy contract storage refuses symlink targets. A pre-existing workflow `runner/` directory symlink is followed; keep that private plugin-data root trusted. One is not the other.
 - Cloud pilot: two cases per arm. Full completion within a five-call cap moved gpt-oss:20b from 0/2 to 1/2 and gemma4:31b from 1/2 to 2/2. All eight runs reserved the correct stock quantity. Three baseline failures missed `finish_task` despite a correct readback. The guided runs used 22.2% more tokens. The deterministic no-model control completed 2/2. No dollar savings or general ranking.

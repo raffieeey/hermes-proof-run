@@ -84,10 +84,7 @@ scope, after credential refusal.
 
 The extra host change is [docs/host-integration.md](host-integration.md) and
 [integration/hermes-checked-execution.patch](../integration/hermes-checked-execution.patch).
-The supported source build is Hermes `67664e236ddcc45824b871d575677287599af152`
-with the supplied patch. Verification covers 184 checked-host/conformance tests,
-26 hosted-scope denial tests, and the full registered-command workflow journey.
-The [setup guide](host-integration.md) applies the version-matched SDK change.
+The version-pinned workflow target is Hermes `67664e236ddcc45824b871d575677287599af152` with the supplied patch. Prior release notes report 184 host/conformance tests, 26 hosted-scope denial tests and a registered-command journey, but raw output for those results is not retained; the current 25-probe stock-host receipt does not verify the patched workflow. See the [verification notes](verification.md) and [setup guide](host-integration.md).
 
 ## Follower
 

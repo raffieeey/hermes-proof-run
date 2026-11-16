@@ -1,6 +1,6 @@
 # TDD implementation map
 
-Proof Run v0.2.0 implements the execution loop specified in the reviewed execution TDD revision 0.3. The design revision and plugin release version are separate identifiers.
+This map describes Proof Run v0.2.0 implementation scope and its relation to a reviewed execution TDD revision 0.3. The TDD itself is not included in this repository, so its section references below cannot be independently checked here. The design revision and plugin release version are separate identifiers.
 
 The core split is unchanged: the teacher demonstrates a procedure, an operator reviews its scope, a data-only workflow carries the procedure, and a deterministic runtime executes it. A follower handles bounded decisions. Model choice is based on task quality and execution cost, not a fixed parameter count.
 
@@ -10,9 +10,9 @@ The core split is unchanged: the teacher demonstrates a procedure, an operator r
 | §5 demonstration, workflow and run artifacts | [`capture.py`](../proof-run/proof_run/capture.py), [`workflow.py`](../proof-run/proof_run/workflow.py), [`store.py`](../proof-run/proof_run/store.py) | Complete receipt joins, immutable revisions, separate assurance fields and stored-run tests |
 | §6 typed live binding and finite checks | [`compiler.py`](../proof-run/proof_run/compiler.py), [`workflow.py`](../proof-run/proof_run/workflow.py) | Input validation, identity checks, reference/predicate validation and effect-intent bindings |
 | §7 bounded decision API | [`follower.py`](../proof-run/proof_run/follower.py), [`engine.py`](../proof-run/proof_run/engine.py) | Closed decision schema, authorized IDs, abstention and explicit route/resource tests |
-| §8 checked host boundary | [`hostport.py`](../proof-run/proof_run/hostport.py), [shipped Hermes SDK patch](../integration/hermes-checked-execution.patch) | Rewritten arguments, approvals, bound session identity, receipts and nine independent scope controls |
+| §8 checked host boundary | [`hostport.py`](../proof-run/proof_run/hostport.py), [shipped Hermes SDK patch](../integration/hermes-checked-execution.patch) | Plugin host-adapter tests; the earlier patched-host test totals and scope-control results are not backed by retained raw logs (see [verification](verification.md)) |
 | §9 scheduling and durable state | [`engine.py`](../proof-run/proof_run/engine.py), [`store.py`](../proof-run/proof_run/store.py) | SQLite intent/reservation, crash/fence, cancellation, unknown-outcome status lookup and recovery tests |
-| §10 ticket example | [`example_ticket.py`](../proof-run/proof_run/example_ticket.py), [`run_actual_host_journey.py`](../scripts/run_actual_host_journey.py) | Real checked SDK calls, separate source/routing revisions and persisted target readback |
+| §10 ticket example | [`example_ticket.py`](../proof-run/proof_run/example_ticket.py), [`run_actual_host_journey.py`](../scripts/run_actual_host_journey.py) | Synthetic ticket fixture and registered-command self-test are present; the earlier patched-host journey result has no retained run log (see [verification](verification.md)) |
 | §11 compatibility | Existing [`core.py`](../proof-run/proof_run/core.py) exact gates plus the separate workflow namespace | 146-plugin-test suite and 25 stock-host checks |
 | §12 approvals/failures and §13 privacy/trust | Host final authorization, credential refusal, private storage, explicit effect and model budgets | Failure/replay tests; [supported setup](host-integration.md) and [storage reference](safety.md) |
 | §14 evaluation | [Cloud following pilot](../benchmarks/cloud-following-pilot/README.md), actual SDK example and offline replay | Each reports its own measured layer: model following, deterministic runtime behavior or interface conformance |

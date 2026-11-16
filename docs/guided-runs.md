@@ -24,7 +24,7 @@ A saved **procedure** is the recorded action steps, with chosen values turned in
   (send any message; the follower model is guided and checked step by step)
 ```
 
-It needs only the standard plugin surface: the `/proof` command and the `pre_tool_call`, `post_tool_call`, `pre_llm_call` and `on_session_finalize` hooks. No host patch, no model call by the plugin, no network.
+It needs only the standard plugin surface: the `/proof` command and the `pre_tool_call`, `post_tool_call`, `pre_llm_call` and `on_session_finalize` hooks. The guided-run feature itself sends no model-inference or network requests. Workflow mode is separate; its optional local Ollama follower uses loopback HTTP.
 
 ## Commands
 
@@ -117,11 +117,11 @@ Live result values are always required for the arguments that use them. Other re
 
 The acceptance tests prove the mechanics with Hermes-shaped tool results. They do not establish a general productivity or cost advantage.
 
-A live synthetic inventory task was run on an isolated Hermes home with a real `AIAgent.run_conversation`, using the `glm-5.3` teacher and `glm-5.3-flash` follower through the configured provider. The teacher saved a five-tool procedure. Four guided runs on a different request ID and SKU all completed with exactly one reserve, correct readback and no wrong mutation; three unguided baseline runs with the same cheaper model also completed correctly.
+The retained aggregate in `benchmarks/live-guided/results.json` reports a live synthetic inventory task with a real Hermes `AIAgent.run_conversation`, using the `glm-5.3` teacher and `glm-5.3-flash` follower through the configured provider. The report says the teacher saved a five-tool procedure; four guided runs on a different request ID and SKU completed with exactly one reserve, correct readback and no wrong mutation, and three unguided runs with the same follower also passed. The harness and per-run transcripts were not retained, so the live execution path and fresh-read bindings cannot be independently checked from this aggregate.
 
-Measured result for these six runs:
+Measured results reported for the seven follower runs:
 
 - guided: 4/4 passed, 5 model API calls each, 15,832 to 16,174 reported total tokens
 - unguided: 3/3 passed, 6 model API calls each, 16,707 to 16,733 reported total tokens
 
-This is a single small task with four guided samples and three unguided samples. It does not prove general superiority, token savings after teaching cost, or model quality. It does show that a cheaper model can complete a fresh-request run through the procedure, including fresh snapshot token, stock version, source revision and operation key, and that the unguided control can also solve the same task. A larger and more varied benchmark is still required before making a performance claim.
+This is one small task with four guided and three unguided samples. The recorded results do not prove general superiority, token savings after teaching cost, or model quality. Unit tests cover the live-binding mechanism; the aggregate live-run data does not verify which fresh values the follower used. A larger and more varied benchmark is still required before making a performance claim.

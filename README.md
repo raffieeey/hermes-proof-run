@@ -6,9 +6,7 @@ Proof Run records the checks and actions of a successful Hermes task, makes the 
 
 **v0.3.1** · Hermes Agent plugin · MIT
 
-https://github.com/user-attachments/assets/a712c878-fc68-471e-ae21-008ff673e3de
-
-*Product overview. Unmute the player for audio.* [Download the video](https://github.com/raffieeey/hermes-proof-run/releases/download/v0.2.0/proof-run-overview.mp4)
+[Watch or download the product overview (MP4)](https://github.com/raffieeey/hermes-proof-run/releases/download/v0.2.0/proof-run-overview.mp4)
 
 ## What's new in v0.3.1
 
@@ -16,20 +14,22 @@ https://github.com/user-attachments/assets/a712c878-fc68-471e-ae21-008ff673e3de
 - **Interrupted runs stay held:** a plugin reload re-arms an unexpired guided run as stopped, blocking its action tools until `/proof cancel`.
 - **Unreadable run state fails closed:** every effectful tool in that session is blocked until `/proof cancel`; read-only tools remain available.
 - **New commands:** `/proof save`, `/proof pin` and `/proof unpin`. `/proof run` and `/proof inspect` also handle saved procedures.
-- The guide uses the standard `pre_llm_call` hook, with no host patch and no model or network call by the plugin.
+- The guide is delivered by the standard `pre_llm_call` hook. Guided runs need no host patch and make no model-inference or network requests; the separate workflow mode can use local Ollama over loopback HTTP.
 - Strict guard mode and checked-execution workflows are unchanged and separate.
 
 See the [release notes](CHANGELOG.md#031---2026-11-16) for the full change list.
 
 ## Get started
 
-Use Hermes Agent on a Linux/POSIX host with Python 3.11 or newer. Install from `main`:
+Use Hermes Agent on a Linux host with the managed Python runtime for your host release (the pinned host source requires Python `>=3.11,<3.15`). The installer requires a full commit SHA, so resolve `main` first:
 
 ```sh
-hermes plugins install raffieeey/hermes-proof-run/proof-run --ref main --enable
+PLUGIN_SHA="$(git ls-remote https://github.com/raffieeey/hermes-proof-run.git refs/heads/main | cut -f1)"
+test "${#PLUGIN_SHA}" -eq 40
+hermes plugins install raffieeey/hermes-proof-run/proof-run --ref "$PLUGIN_SHA" --enable
 ```
 
-v0.3.1 is on `main` and not yet tagged. The Hermes catalog entry still pins v0.1.0, which has none of these commands.
+v0.3.1 is on `main` and not yet tagged. The [upstream Hermes catalog entry](https://github.com/NousResearch/hermes-agent/blob/main/plugin-catalog/proof-run.yaml) still pins v0.1.0 at `36f3f4111b6d8cd5cf67d53eaf54e62148fcf3ca`, which predates these commands. The proposed update is in [docs/catalog-entry.yaml](docs/catalog-entry.yaml) and is not in the catalog yet.
 
 Publishing a release does not update an already-installed plugin or running gateway automatically. Workflow execution also needs the [supported host setup](docs/host-integration.md).
 
@@ -277,14 +277,14 @@ All eight runs reserved the correct quantity. Most missed completions ran out of
 
 ### Live guided-run check
 
-A live synthetic inventory task ran on an isolated Hermes home with a real `AIAgent.run_conversation`. `glm-5.3` taught a five-tool procedure through the configured provider. Four `glm-5.3-flash` guided runs on a different request ID and SKU all completed with exactly one reserve, correct readback and no wrong mutation. Three unguided baseline runs with the same cheaper model also completed correctly.
+The retained results in [benchmarks/live-guided/results.json](benchmarks/live-guided/results.json) report a synthetic inventory task run with a real `AIAgent.run_conversation`: one `glm-5.3` teacher run, four `glm-5.3-flash` guided runs on a different request ID and SKU, and three unguided runs with the same follower. All seven follower runs are reported as complete with the stated readback and mutation checks.
 
 | Arm | Passed | API calls per run | Reported total tokens |
 |---|---:|---:|---:|
 | Guided `glm-5.3-flash` | 4/4 | 5 | 15,832–16,174 |
 | Unguided `glm-5.3-flash` | 3/3 | 6 | 16,707–16,733 |
 
-This is one small task with four guided samples and three unguided samples. It does not prove general superiority, token savings after teaching cost, or model quality. It does show that the guided procedure resolves fresh snapshot tokens, stock versions, source revisions and operation keys from the run's own reads rather than replaying the teacher's. The recorded evidence and claim ceiling are in [benchmarks/live-guided](benchmarks/live-guided/README.md).
+This is one small task with four guided and three unguided samples. The harness and per-run transcript were not retained, so the reported live execution path and fresh-read bindings cannot be independently checked from the aggregate JSON. The report does not establish general superiority, token savings after teaching cost, or model quality. The code-level live-binding behavior is covered by the plugin tests.
 
 ## Test the release
 
@@ -297,7 +297,7 @@ python3 -m unittest discover -s benchmarks/cloud-following-pilot -p 'test_*.py' 
 python3 benchmarks/cloud-following-pilot/replay.py
 ```
 
-The plugin suite covers 187 tests: 146 existing tests, 19 frozen guided-run acceptance tests, 13 persistence, validation, live-binding, hook-order, input-templating, and malformed-command regression tests, and 9 durability and fail-closed regression tests. The benchmark adds 10 driver tests and offline replay of 39 responses across 8 trials. These commands make no model calls. [Verification details](docs/verification.md) document the host checks and individual evidence records.
+At the v0.3.1 preparation tree the plugin suite had 187 tests: 146 tests at the v0.2.0 tag, 19 frozen guided-run acceptance tests, 13 persistence, validation, live-binding, hook-order, input-templating and malformed-command regression tests, and 9 durability/fail-closed regression tests. The current suite has 192 tests after adding 5 catalog-folder integrity tests. The benchmark adds 10 driver tests and offline replay of 39 responses across 8 trials. These commands make no model calls. [Verification details](docs/verification.md) document the host checks and individual evidence records.
 
 ## How protection works
 
@@ -307,7 +307,7 @@ Keep plugin state in a private, trusted directory. Read the [safety and storage 
 
 ## Architecture
 
-The release implements the reviewed TDD execution loop. The [TDD-to-code map](docs/tdd-implementation.md) links capture, compilation, promotion, checked execution and recovery to their implementation and tests. See the [design reference](docs/design.md) for the data model and execution phases. The [guided-run design](docs/guided-runs.md) covers procedures, run state and verdicts.
+The release documents its implementation structure and boundaries. The [implementation map](docs/tdd-implementation.md) links the v0.2.0 design areas to code and tests; the [design reference](docs/design.md) describes the workflow data model and execution phases. The [guided-run design](docs/guided-runs.md) covers procedures, run state and verdicts.
 
 ## Background
 

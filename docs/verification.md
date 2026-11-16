@@ -2,9 +2,9 @@
 
 Run the checks for each layer: saved contracts, the workflow runtime, the Hermes SDK and model following.
 
-## Current verification (v0.3.1 preparation, 2026-11-16)
+## Current verification (audit tree, 2026-11-16)
 
-The release-preparation tree passed the following commands from the repository root, in order. The explicit `cd ..` returns to the repository root after the first test command. `python3` resolved to Hermes-managed Python 3.14.9 at `/home/afifah/.hermes/installs/9e5946996ecbd658/environments/cdbfee10e1b148a1b9d9dee2f798ce48/venv/bin/python3`.
+These commands were run from the repository root. The explicit `cd ..` returns to the root after the plugin suite. `python3` resolved to Hermes-managed Python 3.14.9 at `/home/afifah/.hermes/installs/9e5946996ecbd658/environments/cdbfee10e1b148a1b9d9dee2f798ce48/venv/bin/python3`.
 
 ```sh
 cd proof-run && PYTHONPATH=. python3 -m unittest discover -s tests -q
@@ -13,18 +13,18 @@ python3 -m unittest discover -s benchmarks/cloud-following-pilot -p 'test_*.py' 
 python3 benchmarks/cloud-following-pilot/replay.py
 python3 -m compileall -q proof-run scripts
 git diff --check
-python3 scripts/verify_host.py --host-source /home/afifah/.hermes/hermes-agent --output docs/host-verification-2026-11-16.json
+python3 scripts/verify_host.py --host-source /home/afifah/.hermes/hermes-agent --output "$HOME/proof-run-host-verification.json"
 ```
 
-Results: 187 plugin tests passed; 10 cloud-pilot driver tests passed; offline replay verified 39 responses across 8 identical target-state replays; compileall and `git diff --check` passed. The host verifier ran in-process against host checkout `e96221fa73d2dac7ba9f3bc5a8b866b3d0fc188e` and returned `total=25`, `passed=25`, `failed=0`, `network_attempts=0`. The host checkout had no tracked modifications; untracked files were present. The complete JSON receipt is [host-verification-2026-11-16.json](host-verification-2026-11-16.json).
+Results: 192 plugin tests passed. The earlier v0.3.1 preparation commit `9de5f4e` had 187; the current tree adds 5 catalog-folder integrity tests. The benchmark suite passed 10 tests; offline replay verified 39 responses across 8 identical target-state replays. `compileall` and `git diff --check` passed. The host verifier ran in-process against host checkout `e96221fa73d2dac7ba9f3bc5a8b866b3d0fc188e` and returned `total=25`, `passed=25`, `failed=0`, `network_attempts=0`. The host checkout had no tracked modifications; untracked files were present. The checked-in receipt is [host-verification-2026-11-16.json](host-verification-2026-11-16.json).
 
-Coverage is distinct by layer: the plugin and benchmark suites are local automated tests; `scripts/verify_host.py` exercises the real Hermes loader, plugin commands/hooks and synthetic tool paths in temporary profile homes. The verifier forbids socket connections. It is not the patched checked-execution workflow journey or a live gateway test. No model call, production action, or live Telegram reply was tested; no Telegram reply is claimed.
+Coverage is distinct by layer: the plugin and benchmark suites are local automated tests; `scripts/verify_host.py` exercises the real Hermes loader, plugin commands/hooks and synthetic tool paths in temporary profile homes. Its audit hook blocks Python `socket.connect` attempts; the receipt records zero attempts. It is not the patched checked-execution workflow journey or a live gateway test. No model call, production action, or live Telegram reply was tested; no Telegram reply is claimed.
 
 ## 1. Historical exact-gate checks (34 / 24)
 
-The original `14/14` smoke assertions manually imported the plugin, supplied a fake context and invoked callbacks with invented tool outputs. They did not call a frontier model, call a cheap model, execute a real mutation handler through Hermes, or measure a model's task success. The original eight unit tests and the host's catalog validator passed despite material session, argument-matching, outcome and storage defects.
+The project history reports that an early 14/14 smoke run manually imported the plugin, supplied a fake context and invoked callbacks with invented tool outputs. No run record for that smoke result is retained here, so its count is an unverified historical report, not current test evidence. The original eight unit tests and host catalog validator are also described as passing before material session, argument-matching, outcome and storage defects were found.
 
-Before the hardening changes, the expanded real-host regression harness reproduced **14 failures among 20 checks**, with six controls passing. One failure was an uncaught command-validation exception. The failure count is a set of deliberately chosen regression cases, not an estimate of overall reliability or an independent defect count.
+A later pre-hardening report records **14 failures among 20 checks**, with six controls passing. The per-case run output is not retained, so the failure count is also an unverified historical report, not an estimate of reliability or an independently established defect count.
 
 Historical v0.1.0 exact-gate result:
 
@@ -33,7 +33,7 @@ Historical v0.1.0 exact-gate result:
 - The real registry mutation counter was 1 after capture, 2 after an allowed replay, and remained 2 after a drift block.
 - A mismatching replay result persisted `unproven`; reloading the plugin did not permit another mutation.
 - The executed, path-sanitized observations are saved in [`proof-run/demo-output.txt`](../proof-run/demo-output.txt). These are synthetic local fixtures, not model calls.
-- Separate out-of-process plugin-host startup could not be exercised in that isolated setup: its channel closed before the plugin loaded. That host/bootstrap path is not included in the passing in-process result.
+- The stored receipt is in-process only. A prior note reports that a separate out-of-process startup ended before the plugin loaded, but no run output for that failure is retained.
 
 Those counts do not cover the workflow runner, the checked-execution host patch, or the cloud following pilot.
 
@@ -47,13 +47,13 @@ cd proof-run
 PYTHONPATH=. python3 -m unittest discover -s tests -v
 ```
 
-The current v0.3.1-preparation run counted 187 passing plugin tests; see the current verification section above. Passing GitHub Actions on a tag is the public record for that release. Do not reuse the historical 34 as a current local count.
+The v0.3.1 preparation commit `9de5f4e` had 187 passing plugin tests. The current audit tree has 192 after the five catalog-folder integrity tests; see the current verification section above. Passing GitHub Actions on a tag is the public record for that release. Do not reuse the historical 34 as a current local count.
 
 ## 3. Patched host integration
 
 Workflow `/proof run` needs the extra checked-execution Hermes change in [docs/host-integration.md](host-integration.md) and [integration/hermes-checked-execution.patch](../integration/hermes-checked-execution.patch). Missing support is `HOST_CAPABILITY_MISSING`. There is no raw `dispatch_tool` fallback.
 
-The release patch applies to Hermes `67664e236ddcc45824b871d575677287599af152`. The rebased host passed 184 checked-execution, middleware, plugin and conformance tests, including the original nine independent scope controls, plus26 hosted-scope denial tests. The actual registered-command journey captured 6 receipts, prepared/inspected/promoted a revision, ran 2 inputs and independently read back both target queues. The standard-host verifier also passed 25 checks with 0 network attempts.
+The patch target is Hermes `67664e236ddcc45824b871d575677287599af152`. The current retained host receipt above is for a stock host and does not test the patched workflow journey. Release-era notes reported 184 host/plugin/conformance tests, 26 hosted-scope denial tests and a successful registered-command journey, but raw test output for those results is not retained here; treat those historical results as unverified.
 
 ```sh
 python3 scripts/verify_host.py --host-source /path/to/hermes-agent

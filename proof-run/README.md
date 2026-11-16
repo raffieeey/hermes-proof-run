@@ -4,7 +4,7 @@ v0.3.1.
 
 Proof Run records a successful Hermes task at the tool boundary and saves it as a procedure with named inputs. A guided run tells a cheaper follower each step and checks every action before it executes; strict exact guards and checked-execution workflows remain available beside it.
 
-The plugin needs only the standard plugin surface: the `/proof` command and the `pre_tool_call`, `post_tool_call`, `pre_llm_call` and `on_session_finalize` hooks. It makes no model or network calls. It is distributed under the [MIT License](LICENSE).
+The plugin needs only the standard plugin surface: the `/proof` command and the `pre_tool_call`, `post_tool_call`, `pre_llm_call` and `on_session_finalize` hooks. Guided runs themselves make no model-inference or network requests; the separate workflow backend can use local Ollama over loopback HTTP. It is distributed under the [MIT License](LICENSE).
 
 ## Guided runs
 ```text
@@ -14,7 +14,7 @@ $ terminal {"command": "./deploy.sh api 2.1.0"} -> {"cwd": "/srv/app", "error": 
 $ /proof save version=2.1.0 -> Procedure 'deploy' saved (v1, unbound). Inputs: version. Start it with /proof run deploy version=<value>. Nothing is gated outside a run.
 $ /proof run deploy version=2.2.0 -> Run started: 'deploy' step 1 of 1 with version=2.2.0. The next message carries the guide; every action call is checked.
 ```
-The suite has 187 tests: the 146 pre-0.3.0 tests, 19 frozen guided-run acceptance tests in `tests/test_guided_acceptance.py`, 13 persistence, live-binding, hook-order, input-templating, validation and malformed-command regression tests across `tests/test_guided_persistence.py` and `tests/test_guided_transfer.py`, and 9 reload-durability and fail-closed tests in `tests/test_guided_durability.py`. The plugin runtime has no third-party dependencies; only some schema tests use `jsonschema`. The in-process host-verification receipt reports 25 checks passed, 0 failed and 0 network attempts ([receipt](https://github.com/raffieeey/hermes-proof-run/blob/main/docs/host-verification-2026-11-16.json)). It is not a live Telegram or gateway test.
+The suite has 187 tests at the v0.3.1 preparation tree (commit `9de5f4e`); the current tree has 192. The 187 comprise the 146 tests at the v0.2.0 tag, 19 frozen guided-run acceptance tests in `tests/test_guided_acceptance.py`, 13 persistence, live-binding, hook-order, input-templating, validation and malformed-command regression tests across `tests/test_guided_persistence.py` and `tests/test_guided_transfer.py`, and 9 reload-durability and fail-closed tests in `tests/test_guided_durability.py`. The current tree adds 5 catalog-folder integrity tests in `tests/test_catalog_folder.py`; re-count with the suite command below. The plugin runtime has no third-party dependencies; only some schema tests use `jsonschema`. The in-process host-verification receipt reports 25 checks passed, 0 failed and 0 network attempts ([receipt](https://github.com/raffieeey/hermes-proof-run/blob/main/docs/host-verification-2026-11-16.json)). It is not a live Telegram or gateway test.
 
 The saved contract is unbound and carries a `procedure` block with the recorded action steps and the `version` slot. Nothing is gated until a run starts. On every turn of the run's session, `pre_llm_call` returns the guide:
 
@@ -81,7 +81,7 @@ A strict guard gates that tool name in every session of the profile, so recordin
 
 ## Checked-execution workflows
 
-Workflow execution is a repo-level extra, not part of the installed plugin: it needs the checked-execution host patch in [docs/host-integration.md](https://github.com/raffieeey/hermes-proof-run/blob/main/docs/host-integration.md) and [integration/hermes-checked-execution.patch](https://github.com/raffieeey/hermes-proof-run/blob/main/integration/hermes-checked-execution.patch); the plugin alone cannot enable it, and a host without the required API returns `HOST_CAPABILITY_MISSING` rather than falling back to unchecked dispatch. Workflows support at most one effect and one bounded decision each, and `/proof prepare` recognizes a fixed catalog of example tool names.
+Checked-workflow execution code and commands ship in the plugin, but stock Hermes does not provide the required checked-execution API. The workflow path needs the host patch in [docs/host-integration.md](https://github.com/raffieeey/hermes-proof-run/blob/main/docs/host-integration.md) and [integration/hermes-checked-execution.patch](https://github.com/raffieeey/hermes-proof-run/blob/main/integration/hermes-checked-execution.patch); a host without that API returns `HOST_CAPABILITY_MISSING` rather than falling back to unchecked dispatch. Workflows support at most one effect and one bounded decision each, and `/proof prepare` recognizes a fixed catalog of example tool names.
 
 `scripts/demo_runner.py` is a scripted teacher, not a frontier demonstration. `scripts/verify_host.py` exercises a real, pre-provisioned Hermes host, and `scripts/run_actual_host_journey.py` is the explicit actual-host opt-in using registered `/proof` commands. This plugin does not train models.
 
