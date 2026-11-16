@@ -1,7 +1,7 @@
 # Draft for a maintainer-approved PR; this does not update the catalog automatically.
 name: proof-run
 repo: https://github.com/raffieeey/hermes-proof-run
-sha: febd45e092f74e5603de33a20f8f59b9e92abffe
+sha: 3aea03fbda6da00234928b76fef09c40de6f2b37
 subdir: proof-run
 description: "Proof Run records a successful Hermes task at the tool boundary and saves it as a procedure with named inputs. A guided run tells a cheaper follower each step and checks every action before it executes; strict exact guards and checked-execution workflows remain available beside it."
 maintainer: raffieeey
