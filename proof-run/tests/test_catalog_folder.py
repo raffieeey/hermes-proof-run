@@ -69,7 +69,7 @@ class CatalogFolderTests(unittest.TestCase):
         readme = (PLUGIN_ROOT / "README.md").read_text(encoding="utf-8")
         opening = "\n".join(readme.splitlines()[:20])
         self.assertIn("/proof start deploy", opening)
-        self.assertIn("187 plugin tests passed", opening)
+        self.assertIn("The suite has 187 tests", opening)
         self.assertIn("host-verification-2026-11-16.json", opening)
 
     def test_readme_documents_interrupted_run_cancel_and_no_live_test_claim(self):
