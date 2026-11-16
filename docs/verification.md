@@ -85,7 +85,6 @@ python3 -m unittest discover -s benchmarks/cloud-following-pilot -p 'test_*.py' 
 python3 benchmarks/cloud-following-pilot/replay.py
 ```
 
-CI runs both commands after the plugin unittest suite.
 
 ## Schema-2 migration
 

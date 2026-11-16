@@ -5,7 +5,7 @@ Checked against the tree at `6e35f7b` plus the documentation edits in this branc
 | Where | Checkable claim | Evidence | Status |
 |---|---|---|---|
 | `README.md:7,13-22`; `proof-run/plugin.yaml:2`; `CHANGELOG.md:3` | Current plugin version is 0.3.1; v0.3.1 changes and date agree. | `plugin.yaml`; changelog; `git tag --list` | ok |
-| `README.md:9` | Product overview link works. | Original attachment returned 404; release MP4 URL fetched successfully. | fixed |
+| `README.md:9` | Product-overview MP4 link is retained, but external URL availability was not settled in this audit. | Existing release-asset URL in README; no retrievable response evidence retained. | unproven |
 | `README.md:24-33` | Python/platform and install command are valid for this Hermes CLI. | Pinned host `pyproject.toml` (`>=3.11,<3.15`), catalog `platforms: [linux]`; `hermes plugins install --help` requires a full SHA. | fixed |
 | `README.md:30-33`; `docs/catalog-entry.yaml` | v0.3.1 is untagged on `main`; upstream catalog still points to v0.1.0 at `36f3f411…`; local entry is only a draft. | `git tag --list`; upstream `plugin-catalog/proof-run.yaml` raw file; `docs/catalog-entry.yaml` header | ok |
 | `README.md:15-20`; `proof-run/README.md:5-7`; `proof-run/plugin.yaml:3`; `docs/guided-runs.md:27` | Guided runs need no host patch or model/network request; workflows may use loopback Ollama HTTP. | `proof_run/guided.py`; `proof_run/follower.py`; plugin hook registration | fixed |
@@ -33,6 +33,6 @@ Checked against the tree at `6e35f7b` plus the documentation edits in this branc
 | `docs/catalog-entry.yaml:4-11` | Proposed catalog SHA `3aea03fbda6da00234928b76fef09c40de6f2b37` exists and carries plugin v0.3.1 with the audited README/manifest. | `git cat-file`; `git show 3aea03f:proof-run/plugin.yaml` and `proof-run/README.md` | ok |
 | `docs/safety.md:3-11`; `README.md:302-306` | Storage location/modes, symlink handling, secret heuristics, strict-guard evidence and platform limits. | `proof_run/core.py`; guided marker code; unit tests; POSIX `fcntl` use | ok |
 | `docs/tdd-implementation.md:3,7-18`; `README.md:310` | TDD revision/section crosswalk. | TDD source document is not present in the repository; map now says so. | unproven |
-| `docs/verification.md:88` | CI runs plugin tests, benchmark tests and replay. | `.github/workflows/checks.yml` | ok |
+| `docs/verification.md:88` | CI wiring for the benchmark/replay commands was not settled; the claim was removed rather than treated as verified. | Workflow file was located at `.github/workflows/checks.yml`, but its contents were not retained in this audit. | unproven |
 | `docs/host-integration.md:27-33` | Gateway restart command exists and workflow patch loading is not automatic. | `hermes gateway --help`; host integration instructions | ok |
 | `README.md`, `proof-run/README.md`, `docs/*.md` links and paths | Local documentation links and catalog-folder paths resolve. | `tests/test_catalog_folder.py`; checked referenced scripts/files | ok |
