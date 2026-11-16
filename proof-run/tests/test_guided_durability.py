@@ -119,6 +119,24 @@ class GuidedDurabilityTests(GuidedCase):
         self.assertNotIn("run deploy", self.host.proof("status", "run").lower())
 
 
+    def test_unreadable_run_state_blocks_every_effectful_tool(self):
+        self._start_run()
+        run = getattr(self.host, "_proof_run_state")["runs"]["run"]
+        # A shape the gate cannot read at all, so it cannot name covered tools.
+        run["plan"] = "corrupt"
+        message = self.blocked("terminal", deploy("2.2.0"), term("ok"), "run")
+        self.assertIn("unreadable", message.lower())
+        self.assertIn("/proof cancel", message)
+        self.ran("read_file", {"path": "/srv/app/config.yaml"}, {"content": "ok"}, "run")
+        # We cannot prove coverage, so unrelated effectful tools are blocked too.
+        message = self.blocked(
+            "write_file", {"path": "/tmp/unrelated", "content": "ok"}, {"bytes_written": 2}, "run"
+        )
+        self.assertIn("/proof cancel", message)
+        self.assertIn("cancelled", self.host.proof("cancel", "run").lower())
+        self.ran("terminal", {"command": "ls"}, term("ok"), "run")
+
+
 if __name__ == "__main__":
     import unittest
 

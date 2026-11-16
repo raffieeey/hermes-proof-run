@@ -172,6 +172,17 @@ def _drop_run_marker(directory, filename):
         pass
 
 
+def _marker_step_index(run):
+    """Clamp a run's step index to a readable plan; 0 when the plan is unreadable."""
+    plan = run.get("plan") if isinstance(run, dict) else None
+    steps = plan.get("steps") if isinstance(plan, dict) else None
+    last = len(steps) - 1 if isinstance(steps, list) and steps else 0
+    index = run.get("index") if isinstance(run, dict) else 0
+    if not isinstance(index, int) or isinstance(index, bool) or index < 0:
+        index = 0
+    return min(index, last)
+
+
 def _load_run_markers(root, state):
     """Re-arm fresh markers as stopped runs; malformed markers are discarded."""
     try:
@@ -242,16 +253,24 @@ def _on_pre_tool_call(ctx, tool_name, args, **kwargs):
                     tool_call_id=kwargs.get("tool_call_id"),
                 )
             except Exception:
-                plan = run.get("plan") if isinstance(run, dict) else None
-                tools = plan.get("tools", []) if isinstance(plan, dict) else []
-                if tool_name in core.READ_ONLY_TOOLS or tool_name not in tools:
+                # Fail closed. An unreadable run cannot tell us which tools the
+                # procedure covers, so every effectful tool stays blocked in this
+                # session until the operator cancels. Read-only tools stay usable.
+                if tool_name in core.READ_ONLY_TOOLS:
                     return None
-                run["state"] = "stopped"
-                try:
-                    _write_run_marker(_contracts_root(ctx), session, run)
-                except Exception:
-                    pass
-                return _block("guided run state is unreadable; use /proof cancel")
+                plan = run.get("plan") if isinstance(run, dict) else None
+                tools = plan.get("tools") if isinstance(plan, dict) else None
+                if isinstance(run, dict):
+                    run["state"] = "stopped"
+                    if tools:
+                        try:
+                            _write_run_marker(_contracts_root(ctx), session, run)
+                        except Exception:
+                            pass
+                return _block(
+                    "guided run state is unreadable; every effectful tool is blocked "
+                    "in this session. Use /proof cancel to release them."
+                )
             if prior_state != "stopped" and run.get("state") == "stopped":
                 try:
                     _write_run_marker(_contracts_root(ctx), session, run)
@@ -368,7 +387,7 @@ def _on_post_tool_call(ctx, tool_name, args, result, **kwargs):
                 except Exception:
                     # Failed cleanup cannot release the tools; retain a held marker.
                     run["state"] = "stopped"
-                    run["index"] = max(0, len(run["plan"]["steps"]) - 1)
+                    run["index"] = _marker_step_index(run)
                     try:
                         _write_run_marker(_contracts_root(ctx), session, run)
                     except Exception:
@@ -379,7 +398,7 @@ def _on_post_tool_call(ctx, tool_name, args, result, **kwargs):
                 except Exception:
                     run["state"] = "stopped"
                     run["pending"] = None
-                    run["index"] = min(run.get("index", 0), len(run["plan"]["steps"]) - 1)
+                    run["index"] = _marker_step_index(run)
                     try:
                         _write_run_marker(_contracts_root(ctx), session, run)
                     except Exception:
