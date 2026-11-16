@@ -104,14 +104,44 @@ def _write_run_marker(root, session, run):
 
 
 def _delete_run_marker(root, session):
+    """Delete this session's marker, but only a file that proves it is the session's own.
+
+    Decision: cancelling from the session a marker file is named for does NOT delete a
+    file that cannot be shown to be that session's marker. The filename is derived from
+    the session id, so it says whose file this ought to be, not whose it is; text that is
+    not JSON, an oversize file, a link, an unreadable file, or contents naming another
+    session are exactly the files the loader holds every session over, and deleting
+    one silently would destroy the evidence for the hold. Such a file is left in place,
+    still holding every session on the next reload, until it is repaired or removed by
+    hand. A file that does prove its identity (a regular, loadable JSON object whose own
+    session_id is this session) is deleted, whatever else is wrong with its fields.
+
+    Returns True when a file was left at this session's marker name.
+    """
     directory = _open_guided_marker_dir(root, False)
     if directory is None:
-        return
+        return False
     try:
+        filename = _marker_filename(session)
         try:
-            os.unlink(_marker_filename(session), dir_fd=directory)
+            info = os.stat(filename, dir_fd=directory, follow_symlinks=False)
+            if info.st_size > _GUIDED_MARKER_MAX_BYTES:
+                return True
+            raw = core._read_bytes(directory, filename)
+            if raw is None:
+                return False
+            data = json.loads(raw.decode("utf-8"))
         except FileNotFoundError:
-            return
+            return False
+        except Exception:
+            return True
+        if not isinstance(data, dict) or data.get("session_id") != session:
+            return True
+        try:
+            os.unlink(filename, dir_fd=directory)
+        except FileNotFoundError:
+            pass
+        return False
     finally:
         os.close(directory)
 
@@ -147,10 +177,15 @@ def _why(exc):
 def _validate_run_marker(marker, filename):
     if not isinstance(marker, dict):
         raise _MarkerHold("marker is not an object")
-    # A hold names the marker's own session whenever that session is readable, so a
-    # bad field costs one session. Without a readable session, or when the filename
-    # contradicts it, nothing says whose marker this is and every session is held.
+    # A hold names the marker's own session only when that session is readable and the
+    # filename agrees with it. The filename is checked before the schema: a marker whose
+    # identities contradict each other is nobody's, whatever schema it claims, so it holds
+    # every session. Checking the schema first would hold only the session named inside
+    # the file and leave free the session the file is actually named for. Without a
+    # readable session nothing says whose marker this is and every session is held.
     session = _marker_session(marker)
+    if session is not None and filename != _marker_filename(session):
+        raise _MarkerHold("marker filename does not match session")
     version_field = marker.get("schema_version")
     if type(version_field) is not int or version_field != _GUIDED_MARKER_SCHEMA:
         # A newer plugin version may own this marker: hold its session, keep the file.
@@ -159,8 +194,6 @@ def _validate_run_marker(marker, filename):
         )
     if session is None:
         raise _MarkerHold("invalid session id")
-    if filename != _marker_filename(session):
-        raise _MarkerHold("marker filename does not match session")
     raw_name = marker.get("procedure_name")
     if not isinstance(raw_name, str):
         raise _MarkerHold("invalid procedure name", session)
@@ -233,6 +266,15 @@ def _hold_everything(state, reason):
     state["global_hold"] = reasons
 
 
+def _hold_file(state, filename, reason):
+    """Hold every session because of one marker file, and remember which file.
+
+    The file stays on disk, so /proof cancel can say that it will hold again.
+    """
+    _hold_everything(state, reason)
+    state.setdefault("held_files", set()).add(filename)
+
+
 def _marker_hold_message(state, session):
     """Why effectful tools are held for this session by a marker failure, or None."""
     reasons = state.get("global_hold")
@@ -278,15 +320,17 @@ def _scan_run_markers(root, state):
             try:
                 info = os.stat(filename, dir_fd=directory, follow_symlinks=False)
                 if info.st_size > _GUIDED_MARKER_MAX_BYTES:
-                    _hold_everything(
-                        state, f"{label} is larger than {_GUIDED_MARKER_MAX_BYTES} bytes"
+                    _hold_file(
+                        state,
+                        filename,
+                        f"{label} is larger than {_GUIDED_MARKER_MAX_BYTES} bytes",
                     )
                     continue
                 raw = core._read_bytes(directory, filename)
             except FileNotFoundError:
                 continue
             except Exception as exc:
-                _hold_everything(state, f"{label} cannot be read ({_why(exc)})")
+                _hold_file(state, filename, f"{label} cannot be read ({_why(exc)})")
                 continue
             if raw is None:
                 continue
@@ -295,7 +339,7 @@ def _scan_run_markers(root, state):
             except (UnicodeError, ValueError, RecursionError):
                 # Not JSON at all: nothing says which tools a run covered, so the
                 # file is kept as evidence and every session is held.
-                _hold_everything(state, f"{label} is not valid JSON")
+                _hold_file(state, filename, f"{label} is not valid JSON")
                 continue
             try:
                 marker = _validate_run_marker(data, filename)
@@ -303,10 +347,10 @@ def _scan_run_markers(root, state):
                 if exc.session is not None:
                     _hold_session(state, exc.session, str(exc))
                 else:
-                    _hold_everything(state, f"{label} cannot be validated ({exc})")
+                    _hold_file(state, filename, f"{label} cannot be validated ({exc})")
                 continue
             except Exception as exc:
-                _hold_everything(state, f"{label} cannot be validated ({_why(exc)})")
+                _hold_file(state, filename, f"{label} cannot be validated ({_why(exc)})")
                 continue
             if now - marker["updated_at"] > _GUIDED_MARKER_MAX_AGE:
                 _drop_run_marker(directory, filename)
@@ -331,14 +375,59 @@ def _scan_run_markers(root, state):
         os.close(directory)
 
 
+def _kept_held_files(root, state):
+    """Names of the marker files that armed the every-session hold and are still on disk.
+
+    An unreachable store yields none: cancel already says the store itself holds again.
+    """
+    names = state.get("held_files") or set()
+    if not names:
+        return set()
+    try:
+        directory = _open_guided_marker_dir(root, False)
+    except Exception:
+        return set()
+    if directory is None:
+        return set()
+    try:
+        kept = set()
+        for name in names:
+            try:
+                os.stat(name, dir_fd=directory, follow_symlinks=False)
+            except FileNotFoundError:
+                continue
+            except OSError:
+                pass  # present but not statable: still there
+            kept.add(name)
+        return kept
+    finally:
+        os.close(directory)
+
+
+def _kept_files_note(count):
+    if count == 1:
+        return (
+            " 1 unusable guided run marker file remains on disk and holds every "
+            "session again after the next plugin reload until it is repaired or removed."
+        )
+    return (
+        f" {count} unusable guided run marker files remain on disk and hold every "
+        "session again after the next plugin reload until they are repaired or removed."
+    )
+
+
 def _load_run_markers(root, state):
     """Re-arm fresh markers as stopped runs, and fail closed on what cannot be.
 
-    Discarded: valid markers older than 24 hours. Kept, never deleted: a marker
-    that is valid JSON with an invalid field holds its own session when it names
-    one readably (and its filename agrees); text that is not JSON, a marker that
-    names no usable session, and an unreadable directory or marker hold every
-    session. /proof cancel releases a hold.
+    Discarded: valid markers older than 24 hours. Kept, never deleted by the loader: a
+    marker that is valid JSON with an invalid field holds its own session, but only when
+    it names one readably and its filename agrees with that session. A marker whose
+    filename contradicts the session it names (checked before the schema, so a newer
+    schema cannot dodge it), text that is not JSON, a marker that names no usable session,
+    an oversize, linked or unreadable file, and an unreadable directory hold every
+    session. /proof cancel releases a hold. It deletes the cancelling session's own marker
+    only when the file proves it is that session's (see _delete_run_marker); a file that
+    holds every session is never deleted by a cancel, and cancel reports how many remain.
     """
     try:
         _scan_run_markers(root, state)
@@ -879,8 +968,10 @@ def _handle(ctx, raw_args: str, session_id: str = "default", session_key=None, p
                 return _finish(ctx, state, session)
             if cmd == "cancel" and len(args) == 1:
                 note = ""
+                root = _contracts_root(ctx)
+                left = False
                 try:
-                    _delete_run_marker(_contracts_root(ctx), session)
+                    left = _delete_run_marker(root, session)
                 except Exception as exc:
                     if not state.get("global_hold"):
                         return f"Cancellation failed: could not remove the guided run marker ({exc})."
@@ -891,9 +982,16 @@ def _handle(ctx, raw_args: str, session_id: str = "default", session_key=None, p
                     )
                 if (state.get("held_sessions") or {}).get(session):
                     note = " The marker hold on this session is cleared." + note
+                # Files that caused an every-session hold stay on disk, so say so.
+                remaining = _kept_held_files(root, state)
+                if left:
+                    remaining.add(_marker_filename(session))
+                if remaining:
+                    note = _kept_files_note(len(remaining)) + note
                 if state.get("global_hold"):
                     state["global_hold"] = []
                     note = " The marker hold on every session is cleared." + note
+                state["held_files"] = set()
                 _clear_session(state, session)
                 return (
                     "Recording or guided run cancelled in this session. "
@@ -955,6 +1053,7 @@ def register(ctx):
         "unproven": set(),
         "held_sessions": {},
         "global_hold": [],
+        "held_files": set(),
         "checked_frames": {},
         "authorizer_guard": "unattempted",
     }

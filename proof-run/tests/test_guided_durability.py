@@ -137,8 +137,9 @@ class GuidedDurabilityTests(GuidedCase):
                 status = self.host.proof("status", "other")
                 self.assertIn("hold", status.lower())
                 self.assertIn("/proof cancel", status)
-                # /proof cancel releases the hold and leaves the file where it is.
-                self.assertIn("cancelled", self.host.proof("cancel", "other").lower())
+                # /proof cancel releases the hold, leaves the file where it is, and
+                # says that the file will hold every session again after a reload.
+                self._assert_cancel_reports_kept_files(self.host.proof("cancel", "other"), 1)
                 self._assert_kept(marker_path, payload)
                 self.ran("terminal", {"command": "ls"}, term("ok"), "run")
                 self.ran("terminal", {"command": "ls"}, term("ok"), "other")
@@ -146,9 +147,19 @@ class GuidedDurabilityTests(GuidedCase):
                 # The file is still there, so a reload holds again until it is removed.
                 self.host = StockHost(self.root)
                 self._assert_effectful_blocked("other", scope="every session")
+                # The session the file is named for may not delete it either.
+                self._assert_owner_cancel_keeps(marker_path, payload)
                 marker_path.unlink()
                 self.host = StockHost(self.root)
                 self.ran("terminal", {"command": "ls"}, term("ok"), "other")
+        # Garbage appears at the session's own marker path after the plugin loaded, so
+        # no hold exists yet; the owner's cancel still must not delete it, and says so.
+        marker_path.write_bytes(b"{written after load")
+        reply = self.host.proof("cancel", "run")
+        self.assertIn("1 unusable guided run marker file", reply)
+        self.assertIn("every session again after the next plugin reload", reply)
+        self.assertNotIn("is cleared", reply)
+        self._assert_kept(marker_path, b"{written after load")
 
     def test_expired_marker_is_removed_without_rearming(self):
         marker_path = self._start_run()
@@ -208,6 +219,24 @@ class GuidedDurabilityTests(GuidedCase):
             "the marker was deleted while loading",
         )
         self.assertEqual(marker_path.read_bytes(), expected)
+
+    def _assert_cancel_reports_kept_files(self, reply, count):
+        """The reply must say how many unusable files stay and that they hold again."""
+        self.assertIn("cancelled", reply.lower())
+        self.assertIn("The marker hold on every session is cleared.", reply)
+        self.assertIn(f"{count} unusable guided run marker file", reply)
+        self.assertIn("every session again after the next plugin reload", reply)
+        self.assertIn("repaired or removed", reply)
+
+    def _assert_owner_cancel_keeps(self, marker_path, expected, count=1, session="run"):
+        """Cancelling from the session a file is named for does not delete it.
+
+        An unusable marker proves nothing about whose it is, so its filename alone
+        does not entitle the session it names to destroy the evidence.
+        """
+        self.host = StockHost(self.root)
+        self._assert_cancel_reports_kept_files(self.host.proof("cancel", session), count)
+        self._assert_kept(marker_path, expected)
 
     def _skip_if_permissions_do_not_bind(self):
         if hasattr(os, "geteuid") and os.geteuid() == 0:
@@ -273,6 +302,8 @@ class GuidedDurabilityTests(GuidedCase):
             ("session missing", {"schema_version": 2, "session_id": _GONE}),
             ("session empty", {"schema_version": 2, "session_id": ""}),
             ("session not text", {"schema_version": 2, "session_id": 7}),
+            # Readable, but this file is not the one that session's marker would use.
+            ("session contradicts the filename", {"schema_version": 2, "session_id": "someone-else"}),
         ):
             with self.subTest(case=label):
                 marker_path.write_bytes(good)
@@ -281,12 +312,15 @@ class GuidedDurabilityTests(GuidedCase):
                 self._assert_kept(marker_path, kept)
                 self._assert_effectful_blocked("run", scope="every session")
                 self._assert_effectful_blocked("other", scope="every session")
+                self._assert_effectful_blocked("someone-else", scope="every session")
                 self.assertIn("hold", self.host.proof("status", "other").lower())
-                self.assertIn("cancelled", self.host.proof("cancel", "other").lower())
+                self._assert_cancel_reports_kept_files(self.host.proof("cancel", "other"), 1)
                 self.ran("terminal", {"command": "ls"}, term("ok"), "run")
                 self.ran("terminal", {"command": "ls"}, term("ok"), "other")
                 # The kept marker is not ours to remove from another session's cancel.
                 self._assert_kept(marker_path, kept)
+                # Nor from the session its filename names: the contents do not agree.
+                self._assert_owner_cancel_keeps(marker_path, kept)
 
     def test_marker_that_names_no_session_holds_every_session_and_is_kept(self):
         marker_path = self._start_run()
@@ -306,8 +340,15 @@ class GuidedDurabilityTests(GuidedCase):
                 self._assert_effectful_blocked("run", scope="every session")
                 self._assert_effectful_blocked("other", scope="every session")
                 self.assertIn("hold", self.host.proof("status", "run").lower())
-                self.assertIn("cancelled", self.host.proof("cancel", "other").lower())
+                self._assert_cancel_reports_kept_files(self.host.proof("cancel", "other"), 1)
                 self.ran("terminal", {"command": "ls"}, term("ok"), "other")
+                self._assert_owner_cancel_keeps(marker_path, kept)
+                # Removed by hand before a cancel: nothing is left to report.
+                self.host = StockHost(self.root)
+                marker_path.unlink()
+                reply = self.host.proof("cancel", "other")
+                self.assertIn("The marker hold on every session is cleared.", reply)
+                self.assertNotIn("unusable", reply)
 
     def test_invalid_field_with_a_valid_session_id_holds_only_that_session(self):
         marker_path = self._start_run()
@@ -333,10 +374,16 @@ class GuidedDurabilityTests(GuidedCase):
                 self.assertIn("hold", self.host.proof("status", "run").lower())
                 self.assertNotIn("hold", self.host.proof("status", "other").lower())
                 # Another session's cancel does not release this session's hold.
-                self.assertIn("cancelled", self.host.proof("cancel", "other").lower())
+                other_reply = self.host.proof("cancel", "other")
+                self.assertIn("cancelled", other_reply.lower())
+                self.assertNotIn("unusable", other_reply)
                 self._assert_effectful_blocked("run", scope="this session")
                 self._assert_kept(marker_path, kept)
-                self.assertIn("cancelled", self.host.proof("cancel", "run").lower())
+                # The marker names this session and agrees with its filename, so its own
+                # cancel may delete it; no file is left to warn about.
+                owner_reply = self.host.proof("cancel", "run")
+                self.assertIn("cancelled", owner_reply.lower())
+                self.assertNotIn("unusable", owner_reply)
                 self.assertFalse(marker_path.exists())
                 self.ran("terminal", {"command": "ls"}, term("ok"), "run")
 
@@ -359,10 +406,29 @@ class GuidedDurabilityTests(GuidedCase):
                 self._assert_effectful_blocked("run", scope="every session")
                 self._assert_effectful_blocked("other", scope="every session")
                 self.assertIn("hold", self.host.proof("status", "other").lower())
-                self.assertIn("cancelled", self.host.proof("cancel", "other").lower())
+                self._assert_cancel_reports_kept_files(self.host.proof("cancel", "other"), 1)
                 self.ran("terminal", {"command": "ls"}, term("ok"), "run")
                 self.ran("terminal", {"command": "ls"}, term("ok"), "other")
                 self._assert_kept(marker_path, kept)
+                self._assert_owner_cancel_keeps(marker_path, kept)
+        # A duplicate or alias of a valid marker: the original re-arms its run and is the
+        # only file the owner may delete; the aliases stay, are counted, and hold again.
+        marker_path.write_bytes(good)
+        directory = marker_path.parent
+        aliases = [directory / f"run-{label}.json" for label in ("copy-a", "copy-b")]
+        for alias in aliases:
+            alias.write_bytes(good)
+        self.host = StockHost(self.root)
+        self._assert_effectful_blocked("other", scope="every session")
+        reply = self.host.proof("cancel", "other")
+        self._assert_cancel_reports_kept_files(reply, 2)
+        self.assertIn("2 unusable guided run marker files remain", reply)
+        self.assertIn("they are repaired or removed", reply)
+        self.host = StockHost(self.root)
+        self._assert_cancel_reports_kept_files(self.host.proof("cancel", "run"), 2)
+        self.assertFalse(marker_path.exists(), "the valid original is the run's own marker")
+        for alias in aliases:
+            self._assert_kept(alias, good)
 
     def test_unreadable_marker_directory_holds_every_session(self):
         self._skip_if_permissions_do_not_bind()
@@ -380,7 +446,12 @@ class GuidedDurabilityTests(GuidedCase):
         status = self.host.proof("status", "other")
         self.assertIn("hold", status.lower())
         self.assertIn("/proof cancel", status)
-        self.assertIn("cancelled", self.host.proof("cancel", "other").lower())
+        reply = self.host.proof("cancel", "other")
+        self.assertIn("cancelled", reply.lower())
+        # The store itself is unreachable, so no file can be counted; the reply still
+        # says the hold comes back after a reload.
+        self.assertIn("holds again after the next plugin reload", reply)
+        self.assertNotIn("unusable", reply)
         self.ran("terminal", {"command": "ls"}, term("ok"), "run")
         self.ran("terminal", {"command": "ls"}, term("ok"), "other")
         self.assertNotIn("hold", self.host.proof("status", "other").lower())
@@ -450,8 +521,12 @@ class GuidedDurabilityTests(GuidedCase):
         self.host = StockHost(self.root)
         self._assert_effectful_blocked("run", scope="every session")
         self._assert_effectful_blocked("other", scope="every session")
-        self.assertIn("cancelled", self.host.proof("cancel", "other").lower())
+        self._assert_cancel_reports_kept_files(self.host.proof("cancel", "other"), 1)
         self.ran("terminal", {"command": "ls"}, term("ok"), "other")
+        # The session the file is named for cannot read it, so it cannot delete it.
+        self.host = StockHost(self.root)
+        self._assert_cancel_reports_kept_files(self.host.proof("cancel", "run"), 1)
+        self.assertTrue(os.path.lexists(marker_path))
         marker_path.chmod(0o600)
         self._assert_kept(marker_path, original)
 
@@ -465,9 +540,14 @@ class GuidedDurabilityTests(GuidedCase):
         self.assertTrue(marker_path.is_symlink())
         self._assert_effectful_blocked("run", scope="every session")
         self._assert_effectful_blocked("other", scope="every session")
-        self.assertIn("cancelled", self.host.proof("cancel", "other").lower())
+        self._assert_cancel_reports_kept_files(self.host.proof("cancel", "other"), 1)
         self.ran("terminal", {"command": "ls"}, term("ok"), "other")
         self.assertTrue(marker_path.is_symlink())
+        # A link is not read, so the session its name matches cannot delete it either.
+        self.host = StockHost(self.root)
+        self._assert_cancel_reports_kept_files(self.host.proof("cancel", "run"), 1)
+        self.assertTrue(marker_path.is_symlink())
+        self.assertTrue(target.exists())
 
     def test_marker_write_failure_leaves_the_run_stopped_and_blocked(self):
         h = self.host
