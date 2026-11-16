@@ -1,6 +1,6 @@
 # Guided runs
 
-Status: implemented in v0.3.0. The executable contract is `proof-run/tests/test_guided_acceptance.py`; the implementation is `proof_run/guided.py` and `proof_run/bindings.py`.
+Status: implemented in v0.3.0; reload durability and fail-closed unreadable-state handling added in v0.3.1. The executable contract is `proof-run/tests/test_guided_acceptance.py`; the implementation is `proof_run/guided.py` and `proof_run/bindings.py`.
 
 ## Problem
 
