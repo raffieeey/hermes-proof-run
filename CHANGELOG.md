@@ -5,7 +5,7 @@
 ### Changed
 
 - Guided runs write an atomic per-session marker under the existing contracts storage root. A plugin reload re-arms an unexpired marker as a stopped-and-held run; its action tools remain blocked until `/proof cancel`, and expired markers are discarded after 24 hours.
-- If a live guided run's in-memory state is unreadable, every effectful tool in that session is blocked until `/proof cancel`; read-only tools remain available.
+- A live guided run's structure is validated before the "tool is not in the plan" shortcut. If the run is not a mapping, its plan, steps or tool list is missing, empty or mistyped, its step index is outside the plan, or the plan's tool list disagrees with its steps, every effectful tool in that session is blocked until `/proof cancel`; read-only tools remain available. `/proof status` reports the unreadable run.
 
 ### Verification
 

@@ -101,7 +101,7 @@ Live result values are always required for the arguments that use them. Other re
 - The follower must reproduce each action's arguments itself. Very large arguments are a poor fit.
 - A demonstration with a failed call cannot be saved; record a clean run.
 - A plugin reload does not resume a run. A durable marker re-arms it as stopped and held, blocking its action tools until `/proof cancel`; markers older than 24 hours are ignored and removed.
-- If a live run's in-memory state becomes unreadable, every non-read-only tool in that session is blocked until `/proof cancel`; the gate cannot prove coverage it cannot read.
+- A live run is validated before the gate decides whether a tool is covered: the run and its plan must be mappings, `steps` a non-empty list, `tools` a non-empty list of strings that matches the steps' tools, and `index` an integer inside the plan. If any check fails, every non-read-only tool in that session is blocked until `/proof cancel`; the gate cannot prove coverage it cannot read. Read-only tools stay available and `/proof status` reports the unreadable run.
 - Live slots bind only exact read-result values; nested objects and arrays inside a result are not substituted. A procedure that needs one must be taught with an explicit scalar field or handled by the follower.
 - The strict guard and the checked-execution workflow engine are unchanged and separate.
 

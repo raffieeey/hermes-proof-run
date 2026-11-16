@@ -242,9 +242,9 @@ def _on_pre_tool_call(ctx, tool_name, args, **kwargs):
     session = _sid(kwargs.get("session_id"))
     args = args or {}
     with state["lock"]:
-        run = state["runs"].get(session)
-        if run is not None:
-            prior_state = run.get("state")
+        if session in state["runs"]:
+            run = state["runs"][session]
+            prior_state = run.get("state") if isinstance(run, dict) else None
             try:
                 verdict = guided.evaluate_call(
                     run,
@@ -253,9 +253,10 @@ def _on_pre_tool_call(ctx, tool_name, args, **kwargs):
                     tool_call_id=kwargs.get("tool_call_id"),
                 )
             except Exception:
-                # Fail closed. An unreadable run cannot tell us which tools the
-                # procedure covers, so every effectful tool stays blocked in this
-                # session until the operator cancels. Read-only tools stay usable.
+                # Fail closed. A run that is missing, not a mapping, or fails its
+                # structural check cannot tell us which tools the procedure covers,
+                # so every effectful tool stays blocked in this session until the
+                # operator cancels. Read-only tools stay usable.
                 if tool_name in core.READ_ONLY_TOOLS:
                     return None
                 plan = run.get("plan") if isinstance(run, dict) else None
@@ -271,7 +272,11 @@ def _on_pre_tool_call(ctx, tool_name, args, **kwargs):
                     "guided run state is unreadable; every effectful tool is blocked "
                     "in this session. Use /proof cancel to release them."
                 )
-            if prior_state != "stopped" and run.get("state") == "stopped":
+            if (
+                isinstance(run, dict)
+                and prior_state != "stopped"
+                and run.get("state") == "stopped"
+            ):
                 try:
                     _write_run_marker(_contracts_root(ctx), session, run)
                 except Exception:
@@ -365,7 +370,7 @@ def _on_post_tool_call(ctx, tool_name, args, result, **kwargs):
             {"tool": tool_name, "args": args, "result": result, "metadata": metadata}
         )
         run = state["runs"].get(session)
-        if run is not None:
+        if isinstance(run, dict):
             outcome = None
             try:
                 outcome = guided.note_result(
@@ -449,12 +454,13 @@ def _on_pre_llm_call(ctx, **kwargs):
         try:
             text, keep = guided.notice(run)
         except Exception:
-            run["state"] = "stopped"
-            run["pending"] = None
-            try:
-                _write_run_marker(_contracts_root(ctx), session, run)
-            except Exception:
-                pass
+            if isinstance(run, dict):
+                run["state"] = "stopped"
+                run["pending"] = None
+                try:
+                    _write_run_marker(_contracts_root(ctx), session, run)
+                except Exception:
+                    pass
             return {
                 "context": "Proof Run: guided run state is unreadable and stopped. "
                 "Report this to the operator; do not improvise around its tools. "
@@ -780,9 +786,15 @@ def _handle(ctx, raw_args: str, session_id: str = "default", session_key=None, p
                     if isinstance(c.get("procedure"), dict):
                         line += " procedure"
                     lines.append(line)
-                run = state["runs"].get(session)
-                if run is not None:
-                    lines.append(guided.status_text(run))
+                if session in state["runs"]:
+                    run = state["runs"][session]
+                    try:
+                        lines.append(guided.status_text(run))
+                    except Exception:
+                        lines.append(
+                            "guided run state is unreadable; every effectful tool is "
+                            "blocked in this session. Use /proof cancel to release them."
+                        )
                 return "\n".join(lines) or "No contracts."
             return _USAGE
         except (core.ContractError, OSError, ValueError, TypeError, KeyError) as exc:

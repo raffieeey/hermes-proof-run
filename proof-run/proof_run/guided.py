@@ -630,18 +630,53 @@ def _after_block(run: dict, message: str) -> dict:
     return _blocked(message)
 
 
+def validate_run(run, *, finished: bool = False) -> None:
+    """Raise GuidedError unless ``run`` is a structurally sound run.
+
+    The gate decides coverage from the plan's tool list, so a run it cannot read
+    must not be treated as one that covers nothing. A finished run has stepped
+    past its last step, so its index may equal the step count.
+    """
+    if not isinstance(run, dict):
+        raise GuidedError("run state is not a mapping")
+    plan = run.get("plan")
+    if not isinstance(plan, dict):
+        raise GuidedError("run has no readable plan")
+    steps = plan.get("steps")
+    if not isinstance(steps, list) or not steps:
+        raise GuidedError("plan has no readable steps")
+    tools = plan.get("tools")
+    if not isinstance(tools, list) or not tools or not all(isinstance(tool, str) for tool in tools):
+        raise GuidedError("plan has no readable tool list")
+    step_tools = set()
+    for step in steps:
+        if not isinstance(step, dict) or not isinstance(step.get("tool"), str):
+            raise GuidedError("plan holds a step without a tool")
+        step_tools.add(step["tool"])
+    if step_tools != set(tools):
+        raise GuidedError("plan tool list does not match its steps")
+    index = run.get("index")
+    if type(index) is not int or not 0 <= index < len(steps) + (1 if finished else 0):
+        raise GuidedError("run step index is outside the plan")
+
+
 def evaluate_call(
     run, *, tool_name: str, args: dict, tool_call_id=None
 ) -> dict | None:
-    """Gate one proposed call for this session's run, or return None."""
-    if not run:
-        return None
-    if run.get("state") == "completed":
-        return None
+    """Gate one proposed call for this session's run, or return None.
+
+    A run that fails validate_run raises GuidedError for an effectful tool, before
+    any "tool not in the plan" shortcut can let the call through; the plugin treats
+    every exception here as a fail-closed hold.
+    """
     if tool_name in READ_ONLY_TOOLS:
         return None
-    plan = run.get("plan") or {}
-    if tool_name not in plan.get("tools", []):
+    completed = isinstance(run, dict) and run.get("state") == "completed"
+    validate_run(run, finished=completed)
+    if completed:
+        return None
+    plan = run["plan"]
+    if tool_name not in plan["tools"]:
         return None
     total = step_count(run)
     if run.get("state") == "stopped":
