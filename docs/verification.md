@@ -4,10 +4,11 @@ Run the checks for each layer: saved contracts, the workflow runtime, the Hermes
 
 ## Current verification (v0.3.1 preparation, 2026-11-16)
 
-The release-preparation tree passed the following commands from the repository root. Each command was launched in its own shell; the first command changes into `proof-run`. `python3` resolved to Hermes-managed Python 3.14.9 at `/home/afifah/.hermes/installs/9e5946996ecbd658/environments/cdbfee10e1b148a1b9d9dee2f798ce48/venv/bin/python3`.
+The release-preparation tree passed the following commands from the repository root, in order. The explicit `cd ..` returns to the repository root after the first test command. `python3` resolved to Hermes-managed Python 3.14.9 at `/home/afifah/.hermes/installs/9e5946996ecbd658/environments/cdbfee10e1b148a1b9d9dee2f798ce48/venv/bin/python3`.
 
 ```sh
 cd proof-run && PYTHONPATH=. python3 -m unittest discover -s tests -q
+cd ..
 python3 -m unittest discover -s benchmarks/cloud-following-pilot -p 'test_*.py' -q
 python3 benchmarks/cloud-following-pilot/replay.py
 python3 -m compileall -q proof-run scripts
