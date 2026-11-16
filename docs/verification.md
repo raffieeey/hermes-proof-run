@@ -2,6 +2,23 @@
 
 Run the checks for each layer: saved contracts, the workflow runtime, the Hermes SDK and model following.
 
+## Current verification (v0.3.1 preparation, 2026-11-16)
+
+The release-preparation tree passed the following commands from the repository root. Each command was launched in its own shell; the first command changes into `proof-run`. `python3` resolved to Hermes-managed Python 3.14.9 at `/home/afifah/.hermes/installs/9e5946996ecbd658/environments/cdbfee10e1b148a1b9d9dee2f798ce48/venv/bin/python3`.
+
+```sh
+cd proof-run && PYTHONPATH=. python3 -m unittest discover -s tests -q
+python3 -m unittest discover -s benchmarks/cloud-following-pilot -p 'test_*.py' -q
+python3 benchmarks/cloud-following-pilot/replay.py
+python3 -m compileall -q proof-run scripts
+git diff --check
+python3 scripts/verify_host.py --host-source /home/afifah/.hermes/hermes-agent --output docs/host-verification-2026-11-16.json
+```
+
+Results: 187 plugin tests passed; 10 cloud-pilot driver tests passed; offline replay verified 39 responses across 8 identical target-state replays; compileall and `git diff --check` passed. The host verifier ran in-process against host checkout `e96221fa73d2dac7ba9f3bc5a8b866b3d0fc188e` and returned `total=25`, `passed=25`, `failed=0`, `network_attempts=0`. The host checkout had no tracked modifications; untracked files were present. The complete JSON receipt is [host-verification-2026-11-16.json](host-verification-2026-11-16.json).
+
+Coverage is distinct by layer: the plugin and benchmark suites are local automated tests; `scripts/verify_host.py` exercises the real Hermes loader, plugin commands/hooks and synthetic tool paths in temporary profile homes. The verifier forbids socket connections. It is not the patched checked-execution workflow journey or a live gateway test. No model call, production action, or live Telegram reply was tested; no Telegram reply is claimed.
+
 ## 1. Historical exact-gate checks (34 / 24)
 
 The original `14/14` smoke assertions manually imported the plugin, supplied a fake context and invoked callbacks with invented tool outputs. They did not call a frontier model, call a cheap model, execute a real mutation handler through Hermes, or measure a model's task success. The original eight unit tests and the host's catalog validator passed despite material session, argument-matching, outcome and storage defects.
@@ -19,9 +36,9 @@ Historical v0.1.0 exact-gate result:
 
 Those counts do not cover the workflow runner, the checked-execution host patch, or the cloud following pilot.
 
-## 2. Local 146-test suite
+## 2. Historical local 146-test suite
 
-`proof-run/tests` now has 146 unittest methods (capture, compiler, commands, host adapter, follower, runner, workflow, ticket adapter, plus the original core/storage tests). Plugin runtime has no third-party dependencies. Schema checks in `test_follower.py` import `jsonschema`; CI installs `jsonschema>=4.18,<5` before the suite so those checks are mandatory there.
+At the v0.2.0 baseline, `proof-run/tests` had 146 unittest methods (capture, compiler, commands, host adapter, follower, runner, workflow, ticket adapter, plus the original core/storage tests). Plugin runtime has no third-party dependencies. Schema checks in `test_follower.py` import `jsonschema`; CI installs `jsonschema>=4.18,<5` before the suite so those checks are mandatory there.
 
 ```sh
 python3 -m pip install 'jsonschema>=4.18,<5'
@@ -29,7 +46,7 @@ cd proof-run
 PYTHONPATH=. python3 -m unittest discover -s tests -v
 ```
 
-Passing GitHub Actions on this tag is the public record for that suite. Do not reuse the historical 34 as the current local count.
+The current v0.3.1-preparation run counted 187 passing plugin tests; see the current verification section above. Passing GitHub Actions on a tag is the public record for that release. Do not reuse the historical 34 as a current local count.
 
 ## 3. Patched host integration
 

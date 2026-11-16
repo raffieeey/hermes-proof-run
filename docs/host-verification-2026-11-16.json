@@ -1,0 +1,375 @@
+{
+  "isolation": "in_process",
+  "plugin": "/home/afifah/dsh-workspace/hermes-proof-run/proof-run",
+  "host": "/home/afifah/.hermes/hermes-agent",
+  "total": 25,
+  "passed": 25,
+  "failed": 0,
+  "network_attempts": 0,
+  "results": [
+    {
+      "area": "host",
+      "id": "H1-real-host-lifecycle",
+      "criterion": "C2",
+      "passed": true,
+      "expected": "real loader+command+JSON-string hooks create and enforce a live contract; unrelated/unbound calls pass",
+      "observed": {
+        "reply": "Contract 'deploy' is live (v1).\nGating: deploy_service\nExact demonstrated arguments only. Fresh matching reads are required again.",
+        "bound": true,
+        "unrelated": {
+          "blocked": false,
+          "message": null,
+          "modified": null
+        },
+        "bad": {
+          "blocked": true,
+          "message": "Contract deploy: arguments do not match a demonstrated deploy_service call",
+          "modified": null
+        },
+        "good": {
+          "blocked": false,
+          "message": null,
+          "modified": null
+        },
+        "unbound": {
+          "blocked": false,
+          "message": null,
+          "modified": null
+        }
+      }
+    },
+    {
+      "area": "host",
+      "id": "H2-real-host-learn",
+      "criterion": "C2",
+      "passed": true,
+      "expected": "learn uses session A buffer, session B has unknown preconditions",
+      "observed": {
+        "reply": "Contract 'learned' is live (v1), learned from 2 calls.",
+        "session_B": {
+          "blocked": true,
+          "message": "Contract learned: precondition check_service_health.status is unknown",
+          "modified": null
+        }
+      }
+    },
+    {
+      "area": "host",
+      "id": "H3-real-registry-mutation",
+      "criterion": "C2",
+      "passed": true,
+      "expected": "real handle_function_call runs matching mutation and stops drift before handler execution",
+      "observed": {
+        "stop": "Contract 'actual-registry' is live (v1).\nGating: deploy_service\nExact demonstrated arguments only. Fresh matching reads are required again.",
+        "allowed": "{\"deployed\": true}",
+        "blocked": "{\"error\": \"Contract actual-registry: precondition check_service_health.status == healthy, current unhealthy\"}",
+        "counts": [
+          1,
+          2,
+          2
+        ]
+      }
+    },
+    {
+      "area": "host",
+      "id": "H4-literal-rebind-command",
+      "criterion": "C2",
+      "passed": true,
+      "expected": "literal rebind command creates active v2 and admits new demonstrated arguments",
+      "observed": {
+        "rebind": "Rebinding 'deploy'. Do the task once, then /proof stop.",
+        "stop": "Contract 'deploy' is live (v2).\nGating: deploy_service\nExact demonstrated arguments only. Fresh matching reads are required again.",
+        "version": 2,
+        "verdict": {
+          "blocked": false,
+          "message": null,
+          "modified": null
+        }
+      }
+    },
+    {
+      "area": "host",
+      "id": "H5-fresh-manager-reload",
+      "criterion": "C2",
+      "passed": true,
+      "expected": "bound contract survives reload and unknown fresh-session facts block",
+      "observed": {
+        "blocked": true,
+        "message": "Contract deploy: precondition check_service_health.status is unknown",
+        "modified": null
+      }
+    },
+    {
+      "area": "state",
+      "id": "S1-foreign-recording",
+      "criterion": "C4",
+      "passed": true,
+      "expected": "session B tools cannot create session A contract",
+      "observed": {
+        "reply": "Contract not created or changed: recording has no successful mutation or invalid binding",
+        "contract_created": false
+      }
+    },
+    {
+      "area": "state",
+      "id": "S2-foreign-stop",
+      "criterion": "C4",
+      "passed": true,
+      "expected": "session B cannot stop or activate session A recording",
+      "observed": {
+        "reply": "No active recording in this session.",
+        "contract_created": false
+      }
+    },
+    {
+      "area": "state",
+      "id": "S3-foreign-recording-bypass",
+      "criterion": "C4",
+      "passed": true,
+      "expected": "recording A must not exempt B from an existing profile-wide gate",
+      "observed": {
+        "blocked": true,
+        "message": "Contract deploy: arguments do not match a demonstrated deploy_service call",
+        "modified": null
+      }
+    },
+    {
+      "area": "state",
+      "id": "S4-wrong-entity-read",
+      "criterion": "C4",
+      "passed": true,
+      "expected": "api deployment cannot use worker health as its precondition",
+      "observed": {
+        "blocked": true,
+        "message": "Contract deploy: precondition check_service_health.status is unknown",
+        "modified": null
+      }
+    },
+    {
+      "area": "state",
+      "id": "S5-stale-read-reuse",
+      "criterion": "C4",
+      "passed": true,
+      "expected": "a mutating call invalidates the facts consumed by it until refreshed",
+      "observed": {
+        "first": {
+          "blocked": false,
+          "message": null,
+          "modified": null
+        },
+        "second": {
+          "blocked": true,
+          "message": "Contract deploy: precondition check_service_health.status is unknown",
+          "modified": null
+        }
+      }
+    },
+    {
+      "area": "state",
+      "id": "S6-failed-read-metadata",
+      "criterion": "C4",
+      "passed": true,
+      "expected": "an errored read must not establish a healthy precondition",
+      "observed": {
+        "blocked": true,
+        "message": "Contract deploy: precondition check_service_health.status is unknown",
+        "modified": null
+      }
+    },
+    {
+      "area": "outcomes",
+      "id": "O1-error-json",
+      "criterion": "C3",
+      "passed": true,
+      "expected": "failed tool cannot become a successful live contract",
+      "observed": {
+        "reply": "Contract not created or changed: recording contained a failed or unproven call",
+        "contract_created": false
+      }
+    },
+    {
+      "area": "outcomes",
+      "id": "O2-nonzero-exit",
+      "criterion": "C3",
+      "passed": true,
+      "expected": "failed tool cannot become a successful live contract",
+      "observed": {
+        "reply": "Contract not created or changed: recording contained a failed or unproven call",
+        "contract_created": false
+      }
+    },
+    {
+      "area": "outcomes",
+      "id": "O3-host-error-metadata",
+      "criterion": "C3",
+      "passed": true,
+      "expected": "failed tool cannot become a successful live contract",
+      "observed": {
+        "reply": "Contract not created or changed: recording contained a failed or unproven call",
+        "contract_created": false
+      }
+    },
+    {
+      "area": "outcomes",
+      "id": "O4-evidence-stop-survives-reload",
+      "criterion": "C3",
+      "passed": true,
+      "expected": "mismatching replay evidence persists unproven and blocks the next mutation after reload",
+      "observed": {
+        "status": "stock v1 bound=True evidence=unproven",
+        "persisted": "unproven",
+        "next_result": "{\"error\": \"contract outcome is unproven\"}",
+        "mutation_calls": 2
+      }
+    },
+    {
+      "area": "state",
+      "id": "S7-concurrent-observation-consumption",
+      "criterion": "C4",
+      "passed": true,
+      "expected": "two competing mutations cannot consume one read twice",
+      "observed": [
+        {
+          "blocked": false,
+          "message": null,
+          "modified": null
+        },
+        {
+          "blocked": true,
+          "message": "Contract deploy: precondition check_service_health.status is unknown",
+          "modified": null
+        }
+      ]
+    },
+    {
+      "area": "host",
+      "id": "H6-failed-rebind-preserves-active",
+      "criterion": "C6",
+      "passed": true,
+      "expected": "failed re-demonstration leaves the previous bound version byte-identical",
+      "observed": {
+        "reply": "Contract not created or changed: recording contained a failed or unproven call",
+        "unchanged": true,
+        "version": 1,
+        "bound": true
+      }
+    },
+    {
+      "area": "host",
+      "id": "H7-invalid-commands",
+      "criterion": "C2",
+      "passed": true,
+      "expected": "invalid identifiers and invalid learn counts return errors without a contract",
+      "observed": {
+        "replies": [
+          "Contract not created or changed: invalid contract name: use letters, digits, hyphens, underscores (max 64)",
+          "Contract not created or changed: invalid contract name: use letters, digits, hyphens, underscores (max 64)",
+          "N must be between 1 and 100.",
+          "N must be between 1 and 100.",
+          "N must be between 1 and 100.",
+          "N must be between 1 and 100."
+        ],
+        "contracts": 0
+      }
+    },
+    {
+      "area": "actions",
+      "id": "A1-extra-force-argument",
+      "criterion": "C5",
+      "passed": true,
+      "expected": "unrecorded force argument is outside the demonstrated action",
+      "observed": {
+        "blocked": true,
+        "message": "Contract deploy: arguments do not match a demonstrated deploy_service call",
+        "modified": null
+      }
+    },
+    {
+      "area": "actions",
+      "id": "A2-corrupt-contract",
+      "criterion": "C5",
+      "passed": true,
+      "expected": "unreadable safety contract blocks rather than silently disappears",
+      "observed": {
+        "blocked": true,
+        "message": "Proof Run: contract is unreadable or invalid; repair or re-record it",
+        "modified": null
+      }
+    },
+    {
+      "area": "outcomes",
+      "id": "O5-secret-stop-refused",
+      "criterion": "C6",
+      "passed": true,
+      "expected": "activation never restores a recognized secret to a persisted contract",
+      "observed": {
+        "command": "stop",
+        "reply": "Contract not created or changed: recording contained unsafe or invalid data",
+        "contract_created": false,
+        "secret_persisted": false
+      }
+    },
+    {
+      "area": "outcomes",
+      "id": "O6-secret-learn-refused",
+      "criterion": "C6",
+      "passed": true,
+      "expected": "activation never restores a recognized secret to a persisted contract",
+      "observed": {
+        "command": "learn",
+        "reply": "Contract not created or changed: recording contains unsafe or invalid data",
+        "contract_created": false,
+        "secret_persisted": false
+      }
+    },
+    {
+      "area": "host",
+      "id": "H8-legacy-rebind-migration",
+      "criterion": "C6",
+      "passed": true,
+      "expected": "legacy rules remain quarantined until a fresh atomic schema-2 rebind",
+      "observed": {
+        "before": {
+          "blocked": true,
+          "message": "Proof Run: legacy contract requires /proof rebind before reuse",
+          "modified": null
+        },
+        "other_session_during_rebind": {
+          "blocked": true,
+          "message": "Proof Run: legacy contract requires /proof rebind before reuse",
+          "modified": null
+        },
+        "rebind": "Rebinding 'legacy'. Do the task once, then /proof stop.",
+        "stop": "Contract 'legacy' is live (v6).\nGating: deploy_service\nExact demonstrated arguments only. Fresh matching reads are required again.",
+        "schema": 2,
+        "version": 6
+      }
+    },
+    {
+      "area": "host",
+      "id": "H9-symlink-unbind-contained",
+      "criterion": "C6",
+      "passed": true,
+      "expected": "unbind refuses a symlink without modifying its external target",
+      "observed": {
+        "reply": "Contract not created or changed: unsafe or inaccessible contract storage: Too many levels of symbolic links",
+        "target_unchanged": true
+      }
+    },
+    {
+      "area": "host",
+      "id": "H10-workflow-command-surface",
+      "criterion": "C2",
+      "passed": true,
+      "expected": "new capture/run commands exist; capture does not activate schema-2; invalid JSON/run fail closed",
+      "observed": {
+        "usage": "Usage: /proof start <name> [intent] | stop | cancel | learn <name> [N] | rebind <name> | status | unbind <name> | capture start <name> [intent] | capture finish | capture cancel | prepare <name> [json] | inspect <name> | promote <name> <revision> | run <name> [json] | runs | show <run-id> | cancel-run <run-id> | resume <run-id> | save [name=value ...] | pin <name> <tool>.<field> | unpin <name> <tool>.<field>",
+        "started": "Trace-only capture 'route-ticket' started. Demonstrate the task, then /proof capture finish. This does not activate a schema-2 gate.",
+        "finished": "Capture 'route-ticket' finished (incomplete, 0 receipts). Prepare a candidate with /proof prepare route-ticket. No schema-2 contract was activated.",
+        "schema2_created": false,
+        "run": "HOST_CAPABILITY_MISSING: checked execution API is not available on this host",
+        "duplicate_json": "INPUT_INVALID: duplicate JSON key"
+      }
+    }
+  ]
+}
