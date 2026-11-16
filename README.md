@@ -143,7 +143,7 @@ $ terminal {"command": "./deploy.sh api 2.1.0"}
 - A demonstration with a failed call cannot be saved; record a clean run.
 - Inputs must appear in the recorded action arguments. A value that appears in no recorded action argument cannot become an input.
 - By default only actions are checked. Reads are advisory unless pinned, except values a later action reuses from a read, which must come from a successful matching read in the same run.
-- A plugin reload does not resume a run. A durable marker re-arms it as stopped and held, blocking its action tools until `/proof cancel`; markers older than 24 hours are ignored and removed.
+- A plugin reload does not resume a run. A durable marker re-arms it as stopped and held, blocking its action tools until `/proof cancel`; markers older than 24 hours are ignored and removed. A marker that cannot be read or understood holds its session or every session until `/proof cancel` instead of being dropped.
 - The strict guard and the checked-execution workflow engine are unchanged and separate.
 
 ## Strict guard mode

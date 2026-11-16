@@ -2,12 +2,18 @@
 from __future__ import annotations
 
 import json
+import os
+import sys
 import time
+from unittest import mock
 
 try:
     from test_guided_acceptance import GuidedCase, StockHost, deploy, term
 except ModuleNotFoundError:
     from tests.test_guided_acceptance import GuidedCase, StockHost, deploy, term
+
+
+_GONE = object()
 
 
 class GuidedDurabilityTests(GuidedCase):
@@ -135,6 +141,263 @@ class GuidedDurabilityTests(GuidedCase):
         self.assertIn("/proof cancel", message)
         self.assertIn("cancelled", self.host.proof("cancel", "run").lower())
         self.ran("terminal", {"command": "ls"}, term("ok"), "run")
+
+
+    # ----- marker load failures must fail closed, not open -----
+
+    def _rewrite_marker(self, marker_path, **changes):
+        marker = json.loads(marker_path.read_text())
+        for key, value in changes.items():
+            if value is _GONE:
+                marker.pop(key, None)
+            else:
+                marker[key] = value
+        marker_path.write_text(json.dumps(marker))
+        return marker_path.read_bytes()
+
+    def _assert_effectful_blocked(self, session, *, scope):
+        """Every non-read-only tool is blocked; the message names /proof cancel."""
+        for tool, args in (
+            ("terminal", {"command": "ls"}),
+            ("write_file", {"path": "/tmp/unrelated", "content": "ok"}),
+        ):
+            message = self.blocked(tool, args, term("ok"), session)
+            self.assertIn("/proof cancel", message)
+            self.assertIn(scope, message)
+        self.ran("read_file", {"path": "/srv/app/config.yaml"}, {"content": "ok"}, session)
+
+    def _assert_kept(self, marker_path, expected):
+        self.assertTrue(
+            marker_path.exists() or marker_path.is_symlink(),
+            "the marker was deleted while loading",
+        )
+        self.assertEqual(marker_path.read_bytes(), expected)
+
+    def _skip_if_permissions_do_not_bind(self):
+        if hasattr(os, "geteuid") and os.geteuid() == 0:
+            self.skipTest("root bypasses file permissions")
+
+    def _restore_on_cleanup(self, path, mode):
+        def restore():
+            try:
+                os.chmod(path, mode)
+            except FileNotFoundError:
+                pass
+
+        self.addCleanup(restore)
+
+    def test_unsupported_schema_marker_is_kept_and_holds_its_session(self):
+        for label, value in (
+            ("newer", 2),
+            ("far newer", 99),
+            ("zero", 0),
+            ("text", "1"),
+            ("missing", _GONE),
+        ):
+            with self.subTest(schema=label):
+                marker_path = self._start_run()
+                kept = self._rewrite_marker(marker_path, schema_version=value)
+                self.host = StockHost(self.root)
+                self._assert_kept(marker_path, kept)
+                self._assert_effectful_blocked("run", scope="this session")
+                # Only the marker's own session is held.
+                self.ran("terminal", {"command": "ls"}, term("ok"), "other")
+                status = self.host.proof("status", "run")
+                self.assertIn("hold", status.lower())
+                self.assertIn("/proof cancel", status)
+                self.assertNotIn("hold", self.host.proof("status", "other").lower())
+                refused = self.host.proof("run deploy version=2.3.0", "run")
+                self.assertTrue(refused.startswith("Run not started:"), refused)
+                self.assertIn("/proof cancel", refused)
+                begin = self.host.proof("start another", "run")
+                self.assertTrue(begin.startswith("Recording not started:"), begin)
+                # Refusals leave the marker untouched, so a reload still holds.
+                self._assert_kept(marker_path, kept)
+                self.host = StockHost(self.root)
+                self._assert_effectful_blocked("run", scope="this session")
+                self.assertIn("cancelled", self.host.proof("cancel", "run").lower())
+                self.assertFalse(marker_path.exists())
+                self.ran("terminal", {"command": "ls"}, term("ok"), "run")
+                self.host = StockHost(self.root)
+                self.ran("terminal", {"command": "ls"}, term("ok"), "run")
+                self.assertNotIn("hold", self.host.proof("status", "run").lower())
+
+    def test_session_finalize_releases_a_session_hold(self):
+        marker_path = self._start_run()
+        self._rewrite_marker(marker_path, schema_version=2)
+        self.host = StockHost(self.root)
+        self._assert_effectful_blocked("run", scope="this session")
+        self.host.hooks["on_session_finalize"](session_id="run")
+        self.ran("terminal", {"command": "ls"}, term("ok"), "run")
+
+    def test_unsupported_schema_marker_without_a_readable_session_holds_every_session(self):
+        marker_path = self._start_run()
+        good = marker_path.read_bytes()
+        for label, changes in (
+            ("session missing", {"schema_version": 2, "session_id": _GONE}),
+            ("session empty", {"schema_version": 2, "session_id": ""}),
+            ("session not text", {"schema_version": 2, "session_id": 7}),
+        ):
+            with self.subTest(case=label):
+                marker_path.write_bytes(good)
+                kept = self._rewrite_marker(marker_path, **changes)
+                self.host = StockHost(self.root)
+                self._assert_kept(marker_path, kept)
+                self._assert_effectful_blocked("run", scope="every session")
+                self._assert_effectful_blocked("other", scope="every session")
+                self.assertIn("hold", self.host.proof("status", "other").lower())
+                self.assertIn("cancelled", self.host.proof("cancel", "other").lower())
+                self.ran("terminal", {"command": "ls"}, term("ok"), "run")
+                self.ran("terminal", {"command": "ls"}, term("ok"), "other")
+                # The kept marker is not ours to remove from another session's cancel.
+                self._assert_kept(marker_path, kept)
+
+    def test_marker_that_cannot_be_validated_holds_every_session_and_is_kept(self):
+        marker_path = self._start_run()
+        good = marker_path.read_bytes()
+        oversize = b"{" + b" " * (64 * 1024) + b"}"
+        for label, payload in (
+            ("step index outside the actions", lambda m: dict(m, step_index=5)),
+            ("empty action tools", lambda m: dict(m, action_tools=[])),
+            ("invalid procedure name", lambda m: dict(m, procedure_name="not a name!")),
+            ("not an object", lambda m: ["schema_version", 1]),
+            ("oversize", lambda m: oversize),
+        ):
+            with self.subTest(case=label):
+                marker = json.loads(good)
+                value = payload(marker)
+                kept = value if isinstance(value, bytes) else json.dumps(value).encode()
+                marker_path.write_bytes(kept)
+                self.host = StockHost(self.root)
+                self._assert_kept(marker_path, kept)
+                self._assert_effectful_blocked("run", scope="every session")
+                self._assert_effectful_blocked("other", scope="every session")
+                self.assertIn("hold", self.host.proof("status", "run").lower())
+                self.assertIn("cancelled", self.host.proof("cancel", "other").lower())
+                self.ran("terminal", {"command": "ls"}, term("ok"), "other")
+
+    def test_unreadable_marker_directory_holds_every_session(self):
+        self._skip_if_permissions_do_not_bind()
+        marker_path = self._start_run()
+        directory = marker_path.parent
+        directory.chmod(0o000)
+        self._restore_on_cleanup(directory, 0o700)
+        self.host = StockHost(self.root)
+        # Registration completed: the command and every hook are installed.
+        self.assertIsNotNone(self.host.command)
+        for hook in ("pre_tool_call", "post_tool_call", "pre_llm_call", "on_session_finalize"):
+            self.assertIn(hook, self.host.hooks)
+        self._assert_effectful_blocked("run", scope="every session")
+        self._assert_effectful_blocked("other", scope="every session")
+        status = self.host.proof("status", "other")
+        self.assertIn("hold", status.lower())
+        self.assertIn("/proof cancel", status)
+        self.assertIn("cancelled", self.host.proof("cancel", "other").lower())
+        self.ran("terminal", {"command": "ls"}, term("ok"), "run")
+        self.ran("terminal", {"command": "ls"}, term("ok"), "other")
+        self.assertNotIn("hold", self.host.proof("status", "other").lower())
+        # The unreachable marker was not pretended away: it re-arms once readable.
+        directory.chmod(0o700)
+        self.assertTrue(marker_path.exists())
+        self.host = StockHost(self.root)
+        self.assertIn("interrupted", self.blocked("terminal", deploy("2.2.0"), term("ok"), "run").lower())
+
+    def test_unreadable_contracts_store_holds_every_session_and_status_still_says_so(self):
+        self._skip_if_permissions_do_not_bind()
+        marker_path = self._start_run()
+        contracts = marker_path.parent.parent
+        contracts.chmod(0o000)
+        self._restore_on_cleanup(contracts, 0o700)
+        self.host = StockHost(self.root)
+        self.assertIn("pre_tool_call", self.host.hooks)
+        self._assert_effectful_blocked("other", scope="every session")
+        status = self.host.proof("status", "other")
+        self.assertIn("hold", status.lower())
+        self.assertIn("/proof cancel", status)
+        self.assertNotIn("Contract not created or changed", status)
+        self.assertIn("cancelled", self.host.proof("cancel", "other").lower())
+        # The marker hold is released; the strict-guard path still refuses an
+        # unreadable contract store on its own account.
+        message = self.blocked("terminal", {"command": "ls"}, term("ok"), "other")
+        self.assertIn("contract is unreadable", message)
+        self.assertNotIn("every session", message)
+        contracts.chmod(0o700)
+        self.ran("terminal", {"command": "ls"}, term("ok"), "other")
+
+    def test_loading_leaves_a_read_only_marker_directory_alone(self):
+        self._skip_if_permissions_do_not_bind()
+        marker_path = self._start_run()
+        directory = marker_path.parent
+        directory.chmod(0o500)
+        self._restore_on_cleanup(directory, 0o700)
+        self.host = StockHost(self.root)
+        self.assertEqual(directory.stat().st_mode & 0o777, 0o500)
+        self.assertTrue(marker_path.exists())
+        # A readable directory is not a load failure; the run re-arms held as before.
+        self.assertIn("interrupted", self.blocked("terminal", deploy("2.2.0"), term("ok"), "run").lower())
+        self.ran("terminal", {"command": "ls"}, term("ok"), "other")
+
+    def test_marker_directory_listing_failure_holds_every_session(self):
+        self._start_run()
+        real_listdir = os.listdir
+
+        def failing_listdir(path="."):
+            if isinstance(path, int):
+                raise PermissionError(13, "Permission denied")
+            return real_listdir(path)
+
+        with mock.patch("os.listdir", failing_listdir):
+            self.host = StockHost(self.root)
+        self._assert_effectful_blocked("run", scope="every session")
+        self._assert_effectful_blocked("other", scope="every session")
+        self.assertIn("cancelled", self.host.proof("cancel", "other").lower())
+        self.ran("terminal", {"command": "ls"}, term("ok"), "other")
+
+    def test_unreadable_marker_file_holds_every_session_and_is_not_deleted(self):
+        self._skip_if_permissions_do_not_bind()
+        marker_path = self._start_run()
+        original = marker_path.read_bytes()
+        marker_path.chmod(0o000)
+        self._restore_on_cleanup(marker_path, 0o600)
+        self.host = StockHost(self.root)
+        self._assert_effectful_blocked("run", scope="every session")
+        self._assert_effectful_blocked("other", scope="every session")
+        self.assertIn("cancelled", self.host.proof("cancel", "other").lower())
+        self.ran("terminal", {"command": "ls"}, term("ok"), "other")
+        marker_path.chmod(0o600)
+        self._assert_kept(marker_path, original)
+
+    def test_marker_that_is_not_a_regular_file_holds_every_session_and_is_not_deleted(self):
+        marker_path = self._start_run()
+        target = self.root / "elsewhere.json"
+        target.write_bytes(marker_path.read_bytes())
+        marker_path.unlink()
+        marker_path.symlink_to(target)
+        self.host = StockHost(self.root)
+        self.assertTrue(marker_path.is_symlink())
+        self._assert_effectful_blocked("run", scope="every session")
+        self._assert_effectful_blocked("other", scope="every session")
+        self.assertIn("cancelled", self.host.proof("cancel", "other").lower())
+        self.ran("terminal", {"command": "ls"}, term("ok"), "other")
+        self.assertTrue(marker_path.is_symlink())
+
+    def test_marker_write_failure_leaves_the_run_stopped_and_blocked(self):
+        h = self.host
+        h.proof("start release", "teach")
+        self.ran("terminal", {"command": "./build.sh 2.1.0"}, term("built"), "teach")
+        self.ran("terminal", deploy("2.1.0"), term("ok"), "teach")
+        self.assertIn("saved", h.proof("save version=2.1.0", "teach").lower())
+        self.assertIn("started", h.proof("run release version=2.2.0", "run").lower())
+        plugin = sys.modules["proof_run_plugin_under_test"]
+        with mock.patch.object(plugin.core, "_atomic_write", side_effect=OSError("disk full")):
+            self.ran("terminal", {"command": "./build.sh 2.2.0"}, term("built"), "run")
+            message = self.blocked("terminal", deploy("2.2.0"), term("ok"), "run")
+        self.assertIn("stopped", message.lower())
+        self.assertIn("/proof cancel", message)
+        self.assertIn("stopped", self.host.proof("status", "run").lower())
+        # The marker written at start survives, so a reload still holds the run.
+        self.host = StockHost(self.root)
+        self.assertIn("interrupted", self.blocked("terminal", deploy("2.2.0"), term("ok"), "run").lower())
 
 
 if __name__ == "__main__":

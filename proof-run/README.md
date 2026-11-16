@@ -91,6 +91,6 @@ Checked-workflow execution code and commands ship in the plugin, but stock Herme
 - Only the procedure's action tools are gated, and only in the run's session. Reads are advisory unless pinned, except values a later action reuses from a read, which must come from a fresh matching read.
 - Step success is the absence of an error result, not a content match, so result text is never compared.
 - The follower must reproduce each action's arguments itself; very large arguments are a poor fit.
-- A plugin reload does not resume an interrupted run. A durable marker re-arms it as stopped and held, blocking its action tools until `/proof cancel`; markers older than 24 hours are ignored and removed.
+- A plugin reload does not resume an interrupted run. A durable marker re-arms it as stopped and held, blocking its action tools until `/proof cancel`; markers older than 24 hours are ignored and removed. A marker that cannot be read or understood holds its session or every session until `/proof cancel` instead of being dropped.
 - A demonstration with a failed call cannot be saved; record a clean run.
 - The strict guard and the checked-execution workflow engine are unchanged and separate from guided runs.

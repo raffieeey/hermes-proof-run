@@ -28,6 +28,7 @@ _FACT_MAX_AGE = 60.0
 _GUIDED_MARKER_SCHEMA = 1
 _GUIDED_MARKER_MAX_AGE = 24 * 60 * 60
 _GUIDED_MARKER_MAX_BYTES = 64 * 1024
+_GUIDED_MARKER_MAX_REASONS = 16
 _GUIDED_MARKER_DIR = "guided-runs"
 _GUIDED_MARKER_PREFIX = "run-"
 _USAGE = (
@@ -115,29 +116,65 @@ def _delete_run_marker(root, session):
         os.close(directory)
 
 
+class _MarkerHold(ValueError):
+    """A syntactically valid marker the loader cannot re-arm and must not discard.
+
+    ``session`` is set only when the marker names its session readably; without it
+    the failure holds every session.
+    """
+
+    def __init__(self, message, session=None):
+        super().__init__(message)
+        self.session = session
+
+
+def _marker_session(marker):
+    session = marker.get("session_id")
+    if isinstance(session, str) and session and len(session) <= 1024:
+        return session
+    return None
+
+
+def _shown(value):
+    text = repr(value)
+    return text if len(text) <= 24 else text[:21] + "..."
+
+
+def _why(exc):
+    return str(getattr(exc, "strerror", None) or exc or type(exc).__name__)[:100]
+
+
 def _validate_run_marker(marker, filename):
     if not isinstance(marker, dict):
-        raise ValueError("marker is not an object")
-    if type(marker.get("schema_version")) is not int or marker["schema_version"] != _GUIDED_MARKER_SCHEMA:
-        raise ValueError("unsupported marker schema")
+        raise _MarkerHold("marker is not an object")
+    version_field = marker.get("schema_version")
+    if type(version_field) is not int or version_field != _GUIDED_MARKER_SCHEMA:
+        # A newer plugin version may own this marker: hold its session, keep the file.
+        raise _MarkerHold(
+            f"unsupported marker schema version {_shown(version_field)}",
+            _marker_session(marker),
+        )
     raw_name = marker.get("procedure_name")
     if not isinstance(raw_name, str):
-        raise ValueError("invalid procedure name")
-    name = core._validate_contract_name(raw_name)
+        raise _MarkerHold("invalid procedure name")
+    try:
+        name = core._validate_contract_name(raw_name)
+    except core.ContractError:
+        raise _MarkerHold("invalid procedure name") from None
     version = marker.get("contract_version")
     if type(version) is not int or version < 1:
-        raise ValueError("invalid contract version")
+        raise _MarkerHold("invalid contract version")
     session = marker.get("session_id")
     if not isinstance(session, str) or not session or len(session) > 1024:
-        raise ValueError("invalid session id")
+        raise _MarkerHold("invalid session id")
     if filename != _marker_filename(session):
-        raise ValueError("marker filename does not match session")
+        raise _MarkerHold("marker filename does not match session")
     index = marker.get("step_index")
     if type(index) is not int or index < 0:
-        raise ValueError("invalid step index")
+        raise _MarkerHold("invalid step index")
     tools = marker.get("action_tools")
     if not isinstance(tools, list) or not tools or len(tools) > 256:
-        raise ValueError("invalid action tool list")
+        raise _MarkerHold("invalid action tool list")
     if any(
         not isinstance(tool, str)
         or not tool.strip()
@@ -146,15 +183,15 @@ def _validate_run_marker(marker, filename):
         or tool in core.READ_ONLY_TOOLS
         for tool in tools
     ):
-        raise ValueError("invalid action tool name")
+        raise _MarkerHold("invalid action tool name")
     if index >= len(tools):
-        raise ValueError("step index is outside the action sequence")
+        raise _MarkerHold("step index is outside the action sequence")
     updated_at = marker.get("updated_at")
     if isinstance(updated_at, bool) or not isinstance(updated_at, (int, float)):
-        raise ValueError("invalid marker timestamp")
+        raise _MarkerHold("invalid marker timestamp")
     updated_at = float(updated_at)
     if not math.isfinite(updated_at):
-        raise ValueError("invalid marker timestamp")
+        raise _MarkerHold("invalid marker timestamp")
     return {
         "name": name,
         "version": version,
@@ -183,18 +220,50 @@ def _marker_step_index(run):
     return min(index, last)
 
 
-def _load_run_markers(root, state):
-    """Re-arm fresh markers as stopped runs; malformed markers are discarded."""
+def _hold_session(state, session, reason):
+    state.setdefault("held_sessions", {})[session] = reason
+
+
+def _hold_everything(state, reason):
+    reasons = state.get("global_hold") or []
+    if reason not in reasons and len(reasons) < _GUIDED_MARKER_MAX_REASONS:
+        reasons.append(reason)
+    state["global_hold"] = reasons
+
+
+def _marker_hold_message(state, session):
+    """Why effectful tools are held for this session by a marker failure, or None."""
+    reasons = state.get("global_hold")
+    if reasons:
+        return (
+            "guided run markers could not be read or validated "
+            f"({'; '.join(reasons[:3])}), so no guided run can be trusted. "
+            "Every effectful tool is blocked in every session. "
+            "Use /proof cancel to release them."
+        )
+    reason = (state.get("held_sessions") or {}).get(session)
+    if reason:
+        return (
+            f"a guided run marker for this session cannot be re-armed ({reason}) "
+            "and is kept untouched. Every effectful tool is blocked in this session. "
+            "Use /proof cancel to release them."
+        )
+    return None
+
+
+def _scan_run_markers(root, state):
     try:
         directory = _open_guided_marker_dir(root, False)
-    except Exception:
+    except Exception as exc:
+        _hold_everything(state, f"the marker directory cannot be opened ({_why(exc)})")
         return
     if directory is None:
         return
     try:
         try:
             filenames = os.listdir(directory)
-        except OSError:
+        except OSError as exc:
+            _hold_everything(state, f"the marker directory cannot be listed ({_why(exc)})")
             return
         now = time.time()
         for filename in filenames:
@@ -203,38 +272,74 @@ def _load_run_markers(root, state):
                 and filename.endswith(".json")
             ):
                 continue
+            label = f"marker {filename[:12]}..."
             try:
                 info = os.stat(filename, dir_fd=directory, follow_symlinks=False)
                 if info.st_size > _GUIDED_MARKER_MAX_BYTES:
-                    _drop_run_marker(directory, filename)
+                    _hold_everything(
+                        state, f"{label} is larger than {_GUIDED_MARKER_MAX_BYTES} bytes"
+                    )
                     continue
                 raw = core._read_bytes(directory, filename)
-                if raw is None:
-                    continue
-                marker = _validate_run_marker(json.loads(raw.decode("utf-8")), filename)
-                if now - marker["updated_at"] > _GUIDED_MARKER_MAX_AGE:
-                    _drop_run_marker(directory, filename)
-                    continue
-                action_tools = marker["tools"]
-                state["runs"][marker["session_id"]] = {
-                    "name": marker["name"],
-                    "version": marker["version"],
-                    "plan": {
-                        "inputs": {},
-                        "steps": [{"tool": tool} for tool in action_tools],
-                        "tools": action_tools,
-                    },
-                    "index": marker["index"],
-                    "state": "stopped",
-                    "blocks": 0,
-                    "pending": None,
-                    "reads": {},
-                    "interrupted": True,
-                }
-            except Exception:
+            except FileNotFoundError:
+                continue
+            except Exception as exc:
+                _hold_everything(state, f"{label} cannot be read ({_why(exc)})")
+                continue
+            if raw is None:
+                continue
+            try:
+                data = json.loads(raw.decode("utf-8"))
+            except (UnicodeError, ValueError, RecursionError):
+                # Not JSON at all: nothing in it can name a run, so it is discarded.
                 _drop_run_marker(directory, filename)
+                continue
+            try:
+                marker = _validate_run_marker(data, filename)
+            except _MarkerHold as exc:
+                if exc.session is not None:
+                    _hold_session(state, exc.session, str(exc))
+                else:
+                    _hold_everything(state, f"{label} cannot be validated ({exc})")
+                continue
+            except Exception as exc:
+                _hold_everything(state, f"{label} cannot be validated ({_why(exc)})")
+                continue
+            if now - marker["updated_at"] > _GUIDED_MARKER_MAX_AGE:
+                _drop_run_marker(directory, filename)
+                continue
+            action_tools = marker["tools"]
+            state["runs"][marker["session_id"]] = {
+                "name": marker["name"],
+                "version": marker["version"],
+                "plan": {
+                    "inputs": {},
+                    "steps": [{"tool": tool} for tool in action_tools],
+                    "tools": action_tools,
+                },
+                "index": marker["index"],
+                "state": "stopped",
+                "blocks": 0,
+                "pending": None,
+                "reads": {},
+                "interrupted": True,
+            }
     finally:
         os.close(directory)
+
+
+def _load_run_markers(root, state):
+    """Re-arm fresh markers as stopped runs, and fail closed on what cannot be.
+
+    Discarded: text that is not JSON, and valid markers older than 24 hours. Kept,
+    never deleted: a valid JSON marker with an unsupported schema holds its own
+    session (when it names one), and an unreadable directory or marker, or one that
+    cannot be validated, holds every session. /proof cancel releases a hold.
+    """
+    try:
+        _scan_run_markers(root, state)
+    except Exception as exc:
+        _hold_everything(state, f"loading markers failed ({_why(exc)})")
 
 
 def _on_pre_tool_call(ctx, tool_name, args, **kwargs):
@@ -242,6 +347,9 @@ def _on_pre_tool_call(ctx, tool_name, args, **kwargs):
     session = _sid(kwargs.get("session_id"))
     args = args or {}
     with state["lock"]:
+        hold = _marker_hold_message(state, session)
+        if hold is not None and tool_name not in core.READ_ONLY_TOOLS:
+            return _block(hold)
         if session in state["runs"]:
             run = state["runs"][session]
             prior_state = run.get("state") if isinstance(run, dict) else None
@@ -440,6 +548,7 @@ def _on_post_tool_call(ctx, tool_name, args, result, **kwargs):
 def _clear_session(state, session):
     for key in ("runtime", "buffers", "recorders", "runs"):
         state[key].pop(session, None)
+    (state.get("held_sessions") or {}).pop(session, None)
     for key in [k for k in state["pending"] if k[0] == session]:
         del state["pending"][key]
 
@@ -487,6 +596,9 @@ def _begin(ctx, state, args, session, rebind):
     name = core._validate_contract_name(args[1])
     if session in state["recorders"]:
         return "Already recording in this session. Use /proof stop or /proof cancel."
+    hold = _marker_hold_message(state, session)
+    if hold is not None:
+        return f"Recording not started: {hold}"
     held = state["runs"].get(session)
     if held is not None and held.get("interrupted"):
         return "Recording not started: an interrupted guided run is stopped and held. Use /proof cancel first."
@@ -612,6 +724,9 @@ def _guided_save(ctx, state, session, rest):
 
 def _guided_run(ctx, state, session, rest, contract):
     name = contract["contract_id"]
+    hold = _marker_hold_message(state, session)
+    if hold is not None:
+        return f"Run not started: {hold}"
     if session in state["recorders"]:
         return (
             "Run not started: this session is recording. "
@@ -759,12 +874,27 @@ def _handle(ctx, raw_args: str, session_id: str = "default", session_key=None, p
             if cmd == "stop" and len(args) == 1:
                 return _finish(ctx, state, session)
             if cmd == "cancel" and len(args) == 1:
+                note = ""
                 try:
                     _delete_run_marker(_contracts_root(ctx), session)
                 except Exception as exc:
-                    return f"Cancellation failed: could not remove the guided run marker ({exc})."
+                    if not state.get("global_hold"):
+                        return f"Cancellation failed: could not remove the guided run marker ({exc})."
+                    # Nothing reachable to delete: the store itself is what is held.
+                    note = (
+                        f" The guided run marker could not be removed ({exc}); "
+                        "it holds again after the next plugin reload."
+                    )
+                if (state.get("held_sessions") or {}).get(session):
+                    note = " The marker hold on this session is cleared." + note
+                if state.get("global_hold"):
+                    state["global_hold"] = []
+                    note = " The marker hold on every session is cleared." + note
                 _clear_session(state, session)
-                return "Recording or guided run cancelled in this session. Existing contracts are unchanged."
+                return (
+                    "Recording or guided run cancelled in this session. "
+                    "Existing contracts are unchanged." + note
+                )
             if cmd == "learn" and 2 <= len(args) <= 3:
                 return _learn(ctx, state, args, session)
             if cmd == "unbind" and len(args) == 2:
@@ -776,8 +906,17 @@ def _handle(ctx, raw_args: str, session_id: str = "default", session_key=None, p
                     return f"No contract named {name}."
                 return f"Contract {name} unbound (no longer gating)."
             if cmd == "status" and len(args) == 1:
-                contracts = core.list_contracts(_contracts_root(ctx))
                 lines = []
+                hold = _marker_hold_message(state, session)
+                if hold is not None:
+                    lines.append(f"hold: {hold}")
+                try:
+                    contracts = core.list_contracts(_contracts_root(ctx))
+                except (core.ContractError, OSError, ValueError, TypeError, KeyError) as exc:
+                    if hold is None:
+                        raise
+                    contracts = []
+                    lines.append(f"Contracts unavailable: {exc}")
                 for c in contracts:
                     line = (
                         f"{c['contract_id']} v{c['version']} bound={c.get('bound', False)} "
@@ -810,6 +949,8 @@ def register(ctx):
         "buffers": {},
         "pending": {},
         "unproven": set(),
+        "held_sessions": {},
+        "global_hold": [],
         "checked_frames": {},
         "authorizer_guard": "unattempted",
     }
