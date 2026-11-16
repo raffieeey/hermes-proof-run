@@ -23,13 +23,13 @@ See the [release notes](CHANGELOG.md#031---2026-11-16) for the full change list.
 
 ## Get started
 
-Use Hermes Agent on a Linux/POSIX host with Python 3.11 or newer. Once this preparation is merged, install from `main`:
+Use Hermes Agent on a Linux/POSIX host with Python 3.11 or newer. Install from `main`:
 
 ```sh
 hermes plugins install raffieeey/hermes-proof-run/proof-run --ref main --enable
 ```
 
-v0.3.1 is prepared on the local `release/0.3.1-prep` branch. It has not been tagged or published. The Hermes catalog entry still pins v0.1.0, which has none of these commands.
+v0.3.1 is on `main` and not yet tagged. The Hermes catalog entry still pins v0.1.0, which has none of these commands.
 
 Publishing a release does not update an already-installed plugin or running gateway automatically. Workflow execution also needs the [supported host setup](docs/host-integration.md).
 
