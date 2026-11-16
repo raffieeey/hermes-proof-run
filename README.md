@@ -29,7 +29,7 @@ test "${#PLUGIN_SHA}" -eq 40
 hermes plugins install raffieeey/hermes-proof-run/proof-run --ref "$PLUGIN_SHA" --enable
 ```
 
-v0.3.1 is on `main` and not yet tagged. The [upstream Hermes catalog entry](https://github.com/NousResearch/hermes-agent/blob/main/plugin-catalog/proof-run.yaml) still pins v0.1.0 at `36f3f4111b6d8cd5cf67d53eaf54e62148fcf3ca`, which predates these commands. The proposed update is in [docs/catalog-entry.yaml](docs/catalog-entry.yaml) and is not in the catalog yet.
+v0.3.1 is tagged and released (`v0.3.1` → `6c491b2`). The [upstream Hermes catalog entry](https://github.com/NousResearch/hermes-agent/blob/main/plugin-catalog/proof-run.yaml) still pins v0.1.0 at `36f3f4111b6d8cd5cf67d53eaf54e62148fcf3ca`, which predates these commands. The proposed update is in [docs/catalog-entry.yaml](docs/catalog-entry.yaml) and is not in the catalog yet.
 
 Publishing a release does not update an already-installed plugin or running gateway automatically. Workflow execution also needs the [supported host setup](docs/host-integration.md).
 
