@@ -1,5 +1,11 @@
 # Changelog
 
+## [Unreleased]
+
+### Changed
+
+- Guided runs write an atomic per-session marker under the existing contracts storage root. A plugin reload re-arms an unexpired marker as a stopped-and-held run; its action tools remain blocked until `/proof cancel`, and expired markers are discarded after 24 hours.
+
 ## [0.3.0] - 2026-11-14
 
 Guided runs: record a task once, save it as a procedure with named inputs, and run it with a cheaper model that is told the steps and checked step by step.
@@ -20,7 +26,7 @@ Guided runs: record a task once, save it as a procedure with named inputs, and r
 ### Compatibility and validation
 
 - Strict guard mode and the checked-execution workflow engine are unchanged. `/proof stop`, `learn`, `rebind`, `unbind` and every workflow command keep their v0.2.0 behaviour.
-- Guided runs need no host patch, make no model or network call, and keep run state in memory. A plugin reload ends enforcement.
+- Guided runs need no host patch, make no model or network call, and were process-local in v0.3.0. The Unreleased durability change re-arms runs as stopped and held after reload.
 - Live check: one glm-5.3 teacher through the configured provider saved a five-tool inventory procedure; four glm-5.3-flash guided runs on a new request all passed, and three unguided baseline runs also passed. This is a small single-task sample, not a performance or savings claim.
 
 ## 0.2.0 - 2026-11-12

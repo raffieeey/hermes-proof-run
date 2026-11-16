@@ -35,7 +35,7 @@ It needs only the standard plugin surface: the `/proof` command and the `pre_too
 | `/proof inspect <name>` | For a procedure: shows steps, inputs with demonstrated values, and the read facts that can be pinned. Otherwise the existing workflow `inspect`. |
 | `/proof pin <name> <tool>.<field>` / `/proof unpin ...` | Makes a recorded read fact a required precondition, or removes it. |
 | `/proof cancel` | Also ends the session's run and releases its tools. |
-| `/proof status` | Existing lines unchanged. A procedure's line also says `procedure`. An active run adds a line with its name and `step i of n`. |
+| `/proof status` | Existing lines unchanged. A procedure's line also says `procedure`. An active or re-armed held run adds a line with its name, `step i of n` and state. |
 
 `/proof start`, `stop`, `learn`, `rebind`, `unbind` and every workflow command keep their v0.2.0 behaviour. `/proof stop` still creates the strict always-on guard.
 
@@ -67,7 +67,7 @@ A value returned by a read and reused in a later action becomes a **live slot**,
 
 `/proof run` requires every input and accepts no others. A value for a typed slot must parse as that type. One run per session; it refuses while the session is recording or already running, and refuses a contract that is currently bound as a strict guard.
 
-Run state is per session and in memory. Step numbers count action steps only.
+Run markers persist only the session identity, procedure/version, current action-step index, ordered action tool names and update time. Step numbers count action steps only. Markers do not resume execution or restore inputs, reads or pending calls. After reload the run is stopped and held; action tools stay blocked until `/proof cancel`. Markers older than 24 hours are removed.
 
 **Guide.** While a run is active, `pre_llm_call` returns `{"context": ...}` for that session and nothing for others. The guide names the procedure, the bound inputs, `step i of n`, any recorded reads (advisory unless a live slot needs them), the read calls required before the next action, and the next action's tool and arguments. Before a required read has happened, the action arguments are shown with readable `{{fresh tool.field}}` markers; after it, the resolved values are shown. Later steps are summarised. It tells the model to follow the steps exactly, not to improvise with the procedure's tools, and to stop and report if a step is blocked or fails.
 
@@ -100,14 +100,14 @@ Live result values are always required for the arguments that use them. Other re
 - This guides and checks a cooperative follower. It is not a sandbox: a model can still reach the same effect through a tool the procedure never used.
 - The follower must reproduce each action's arguments itself. Very large arguments are a poor fit.
 - A demonstration with a failed call cannot be saved; record a clean run.
-- Run state does not survive a plugin reload. A lost run enforces nothing.
+- A plugin reload does not resume a run. A durable marker re-arms it as stopped and held, blocking its action tools until `/proof cancel`; markers older than 24 hours are ignored and removed.
 - Live slots bind only exact read-result values; nested objects and arrays inside a result are not substituted. A procedure that needs one must be taught with an explicit scalar field or handled by the follower.
 - The strict guard and the checked-execution workflow engine are unchanged and separate.
 
 ## Implementation notes
 
 - New module `proof_run/guided.py` holds templating, the procedure block, run state and verdicts, as pure functions and small classes with no host imports.
-- `__init__.py` wires it: guided verbs are handled before `commands.handle`; `pre_tool_call` evaluates the session's run first and then the existing strict-guard checks; `post_tool_call` reports results to the run; `pre_llm_call` is registered; `on_session_finalize` clears the run.
+- `__init__.py` wires it: guided verbs are handled before `commands.handle`; `pre_tool_call` evaluates the session's run first and then the existing strict-guard checks; `post_tool_call` reports results to the run; `pre_llm_call` is registered; `on_session_finalize` clears the run. Atomic per-session interruption markers use the same contracts root and safe atomic-write helpers, and fresh registration re-arms valid markers as held runs.
 - The storage root comes from the existing `_contracts_root(ctx)`. `guided.py` must not import `plugins.plugin_storage`.
 - The plugin must work with a context that offers only `register_command` and `register_hook`.
 - `core.py` may gain small additive helpers (for example a recorder preview of the steps so far). Existing behaviour and tests must not change.

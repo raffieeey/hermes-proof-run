@@ -645,6 +645,14 @@ def evaluate_call(
         return None
     total = step_count(run)
     if run.get("state") == "stopped":
+        if run.get("interrupted"):
+            return _blocked(
+                f"guided run '{run['name']}' was interrupted by a plugin reload and is "
+                f"stopped at step {min(run.get('index', 0), total - 1) + 1} of {total}. "
+                "Nothing was executed after the interruption. Report the stopped run to "
+                "the operator; do not improvise around it. /proof cancel releases this "
+                "procedure's tools."
+            )
         return _blocked(
             f"guided run '{run['name']}' is stopped at step "
             f"{min(run.get('index', 0), total - 1) + 1} of {total}. "
@@ -821,6 +829,13 @@ def notice(run: dict) -> tuple[str, bool]:
             False,
         )
     if state == "stopped":
+        if run.get("interrupted"):
+            return (
+                f"Proof Run guided run '{run['name']}' was interrupted by a plugin reload "
+                f"and stopped at step {index} of {total}. Report this to the operator; "
+                "do not improvise around the procedure. /proof cancel releases its tools.",
+                True,
+            )
         return (
             f"Proof Run guided run '{run['name']}' stopped at step {index} of {total}. "
             "A step failed or the run was blocked too many times. Report this and wait "

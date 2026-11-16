@@ -89,7 +89,7 @@ The correct call then runs, and the next `pre_llm_call` returns a one-time note:
 | `/proof pin <name> <tool>.<field>` | Makes a recorded read fact a required precondition for each step that recorded it. |
 | `/proof unpin <name> <tool>.<field>` | Removes a pinned fact. |
 | `/proof cancel` | Also ends the session's run and releases its tools. |
-| `/proof status` | Existing lines unchanged. A procedure's line also says `procedure`; an active run adds a line with its name and `step i of n`. |
+| `/proof status` | Existing lines unchanged. A procedure's line also says `procedure`; an active or re-armed held run adds a line with its name, `step i of n` and state. |
 
 `/proof start`, `stop`, `learn`, `rebind`, `unbind` and every workflow command keep their v0.2.0 behaviour. Arguments to `save` and `run` are split with shell-style quoting, so `msg="fix bug"` is one input. Input names match `[A-Za-z][A-Za-z0-9_]{0,31}`.
 
@@ -141,7 +141,7 @@ $ terminal {"command": "./deploy.sh api 2.1.0"}
 - A demonstration with a failed call cannot be saved; record a clean run.
 - Inputs must appear in the recorded action arguments. A value that appears in no recorded action argument cannot become an input.
 - By default only actions are checked. Reads are advisory unless pinned, except values a later action reuses from a read, which must come from a successful matching read in the same run.
-- Run state is in memory and does not survive a plugin reload. A lost run enforces nothing.
+- A plugin reload does not resume a run. A durable marker re-arms it as stopped and held, blocking its action tools until `/proof cancel`; markers older than 24 hours are ignored and removed.
 - The strict guard and the checked-execution workflow engine are unchanged and separate.
 
 ## Strict guard mode

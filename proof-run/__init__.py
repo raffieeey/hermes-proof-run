@@ -8,6 +8,10 @@ from __future__ import annotations
 
 from collections import deque
 from copy import deepcopy
+import hashlib
+import json
+import math
+import os
 from pathlib import Path
 import shlex
 import threading
@@ -21,6 +25,11 @@ from .proof_run.store import WorkflowStore
 _BUFFER_MAX = 100
 _PENDING_MAX = 256
 _FACT_MAX_AGE = 60.0
+_GUIDED_MARKER_SCHEMA = 1
+_GUIDED_MARKER_MAX_AGE = 24 * 60 * 60
+_GUIDED_MARKER_MAX_BYTES = 64 * 1024
+_GUIDED_MARKER_DIR = "guided-runs"
+_GUIDED_MARKER_PREFIX = "run-"
 _USAGE = (
     "Usage: /proof start <name> [intent] | stop | cancel | "
     "learn <name> [N] | rebind <name> | status | unbind <name> | "
@@ -51,6 +60,172 @@ def _block(message):
     return {"action": "block", "message": f"Proof Run: {message}"}
 
 
+def _marker_filename(session):
+    digest = hashlib.sha256(str(session).encode("utf-8", errors="surrogatepass")).hexdigest()
+    return f"{_GUIDED_MARKER_PREFIX}{digest}.json"
+
+
+def _open_guided_marker_dir(root, create):
+    """Open the marker directory beneath the existing contracts root."""
+    with core._contracts_fd(root, create) as contracts_fd:
+        if contracts_fd is None:
+            return None
+        marker_fd = core._open_dir(contracts_fd, _GUIDED_MARKER_DIR, create)
+        if marker_fd is not None and create:
+            try:
+                os.fchmod(marker_fd, 0o700)
+            except OSError:
+                os.close(marker_fd)
+                raise
+        return marker_fd
+
+
+def _write_run_marker(root, session, run):
+    steps = (run.get("plan") or {}).get("steps") or []
+    action_tools = [step["tool"] for step in steps]
+    marker = {
+        "schema_version": _GUIDED_MARKER_SCHEMA,
+        "procedure_name": run["name"],
+        "contract_version": run["version"],
+        "session_id": session,
+        "step_index": run["index"],
+        "action_tools": action_tools,
+        "updated_at": time.time(),
+    }
+    payload = (json.dumps(marker, sort_keys=True, ensure_ascii=False) + "\n").encode("utf-8")
+    directory = _open_guided_marker_dir(root, True)
+    if directory is None:
+        raise OSError("guided run marker directory is unavailable")
+    try:
+        core._atomic_write(directory, _marker_filename(session), payload)
+    finally:
+        os.close(directory)
+
+
+def _delete_run_marker(root, session):
+    directory = _open_guided_marker_dir(root, False)
+    if directory is None:
+        return
+    try:
+        try:
+            os.unlink(_marker_filename(session), dir_fd=directory)
+        except FileNotFoundError:
+            return
+    finally:
+        os.close(directory)
+
+
+def _validate_run_marker(marker, filename):
+    if not isinstance(marker, dict):
+        raise ValueError("marker is not an object")
+    if type(marker.get("schema_version")) is not int or marker["schema_version"] != _GUIDED_MARKER_SCHEMA:
+        raise ValueError("unsupported marker schema")
+    raw_name = marker.get("procedure_name")
+    if not isinstance(raw_name, str):
+        raise ValueError("invalid procedure name")
+    name = core._validate_contract_name(raw_name)
+    version = marker.get("contract_version")
+    if type(version) is not int or version < 1:
+        raise ValueError("invalid contract version")
+    session = marker.get("session_id")
+    if not isinstance(session, str) or not session or len(session) > 1024:
+        raise ValueError("invalid session id")
+    if filename != _marker_filename(session):
+        raise ValueError("marker filename does not match session")
+    index = marker.get("step_index")
+    if type(index) is not int or index < 0:
+        raise ValueError("invalid step index")
+    tools = marker.get("action_tools")
+    if not isinstance(tools, list) or not tools or len(tools) > 256:
+        raise ValueError("invalid action tool list")
+    if any(
+        not isinstance(tool, str)
+        or not tool.strip()
+        or len(tool) > 256
+        or "\x00" in tool
+        or tool in core.READ_ONLY_TOOLS
+        for tool in tools
+    ):
+        raise ValueError("invalid action tool name")
+    if index >= len(tools):
+        raise ValueError("step index is outside the action sequence")
+    updated_at = marker.get("updated_at")
+    if isinstance(updated_at, bool) or not isinstance(updated_at, (int, float)):
+        raise ValueError("invalid marker timestamp")
+    updated_at = float(updated_at)
+    if not math.isfinite(updated_at):
+        raise ValueError("invalid marker timestamp")
+    return {
+        "name": name,
+        "version": version,
+        "session_id": session,
+        "index": index,
+        "tools": tools,
+        "updated_at": updated_at,
+    }
+
+
+def _drop_run_marker(directory, filename):
+    try:
+        os.unlink(filename, dir_fd=directory)
+    except OSError:
+        pass
+
+
+def _load_run_markers(root, state):
+    """Re-arm fresh markers as stopped runs; malformed markers are discarded."""
+    try:
+        directory = _open_guided_marker_dir(root, False)
+    except Exception:
+        return
+    if directory is None:
+        return
+    try:
+        try:
+            filenames = os.listdir(directory)
+        except OSError:
+            return
+        now = time.time()
+        for filename in filenames:
+            if not (
+                filename.startswith(_GUIDED_MARKER_PREFIX)
+                and filename.endswith(".json")
+            ):
+                continue
+            try:
+                info = os.stat(filename, dir_fd=directory, follow_symlinks=False)
+                if info.st_size > _GUIDED_MARKER_MAX_BYTES:
+                    _drop_run_marker(directory, filename)
+                    continue
+                raw = core._read_bytes(directory, filename)
+                if raw is None:
+                    continue
+                marker = _validate_run_marker(json.loads(raw.decode("utf-8")), filename)
+                if now - marker["updated_at"] > _GUIDED_MARKER_MAX_AGE:
+                    _drop_run_marker(directory, filename)
+                    continue
+                action_tools = marker["tools"]
+                state["runs"][marker["session_id"]] = {
+                    "name": marker["name"],
+                    "version": marker["version"],
+                    "plan": {
+                        "inputs": {},
+                        "steps": [{"tool": tool} for tool in action_tools],
+                        "tools": action_tools,
+                    },
+                    "index": marker["index"],
+                    "state": "stopped",
+                    "blocks": 0,
+                    "pending": None,
+                    "reads": {},
+                    "interrupted": True,
+                }
+            except Exception:
+                _drop_run_marker(directory, filename)
+    finally:
+        os.close(directory)
+
+
 def _on_pre_tool_call(ctx, tool_name, args, **kwargs):
     state = _state(ctx)
     session = _sid(kwargs.get("session_id"))
@@ -58,6 +233,7 @@ def _on_pre_tool_call(ctx, tool_name, args, **kwargs):
     with state["lock"]:
         run = state["runs"].get(session)
         if run is not None:
+            prior_state = run.get("state")
             try:
                 verdict = guided.evaluate_call(
                     run,
@@ -65,8 +241,22 @@ def _on_pre_tool_call(ctx, tool_name, args, **kwargs):
                     args=args,
                     tool_call_id=kwargs.get("tool_call_id"),
                 )
-            except (core.ContractError, ValueError, TypeError, KeyError):
+            except Exception:
+                plan = run.get("plan") if isinstance(run, dict) else None
+                tools = plan.get("tools", []) if isinstance(plan, dict) else []
+                if tool_name in core.READ_ONLY_TOOLS or tool_name not in tools:
+                    return None
+                run["state"] = "stopped"
+                try:
+                    _write_run_marker(_contracts_root(ctx), session, run)
+                except Exception:
+                    pass
                 return _block("guided run state is unreadable; use /proof cancel")
+            if prior_state != "stopped" and run.get("state") == "stopped":
+                try:
+                    _write_run_marker(_contracts_root(ctx), session, run)
+                except Exception:
+                    pass
             if verdict is not None and verdict.get("action") == "block":
                 return _block(
                     str(verdict.get("message") or "guided run blocked this call")
@@ -157,8 +347,9 @@ def _on_post_tool_call(ctx, tool_name, args, result, **kwargs):
         )
         run = state["runs"].get(session)
         if run is not None:
+            outcome = None
             try:
-                guided.note_result(
+                outcome = guided.note_result(
                     run,
                     tool_name=tool_name,
                     args=args,
@@ -166,9 +357,33 @@ def _on_post_tool_call(ctx, tool_name, args, result, **kwargs):
                     metadata=metadata,
                     tool_call_id=kwargs.get("tool_call_id"),
                 )
-            except (core.ContractError, ValueError, TypeError, KeyError):
+            except Exception:
                 # An observer error must not leave a run free to continue unchecked.
                 run["state"] = "stopped"
+                run["pending"] = None
+                outcome = "stopped"
+            if run.get("state") == "completed":
+                try:
+                    _delete_run_marker(_contracts_root(ctx), session)
+                except Exception:
+                    # Failed cleanup cannot release the tools; retain a held marker.
+                    run["state"] = "stopped"
+                    run["index"] = max(0, len(run["plan"]["steps"]) - 1)
+                    try:
+                        _write_run_marker(_contracts_root(ctx), session, run)
+                    except Exception:
+                        pass
+            elif outcome in ("advanced", "failed", "stopped") or run.get("state") == "stopped":
+                try:
+                    _write_run_marker(_contracts_root(ctx), session, run)
+                except Exception:
+                    run["state"] = "stopped"
+                    run["pending"] = None
+                    run["index"] = min(run.get("index", 0), len(run["plan"]["steps"]) - 1)
+                    try:
+                        _write_run_marker(_contracts_root(ctx), session, run)
+                    except Exception:
+                        pass
         if tool_name in core.READ_ONLY_TOOLS:
             cache = state["runtime"].setdefault(session, {})
             key = core.fact_key(tool_name, args)
@@ -214,9 +429,18 @@ def _on_pre_llm_call(ctx, **kwargs):
             return None
         try:
             text, keep = guided.notice(run)
-        except (core.ContractError, ValueError, TypeError, KeyError):
-            state["runs"].pop(session, None)
-            return None
+        except Exception:
+            run["state"] = "stopped"
+            run["pending"] = None
+            try:
+                _write_run_marker(_contracts_root(ctx), session, run)
+            except Exception:
+                pass
+            return {
+                "context": "Proof Run: guided run state is unreadable and stopped. "
+                "Report this to the operator; do not improvise around its tools. "
+                "/proof cancel releases them."
+            }
         if not keep:
             state["runs"].pop(session, None)
     return {"context": text} if text else None
@@ -224,14 +448,23 @@ def _on_pre_llm_call(ctx, **kwargs):
 
 def _on_session_finalize(ctx, session_id=None, **kwargs):
     state = _state(ctx)
+    session = _sid(session_id)
     with state["lock"]:
-        _clear_session(state, _sid(session_id))
+        try:
+            _delete_run_marker(_contracts_root(ctx), session)
+        except Exception:
+            # If cleanup is unavailable, the marker re-arms as held on the next load.
+            pass
+        _clear_session(state, session)
 
 
 def _begin(ctx, state, args, session, rebind):
     name = core._validate_contract_name(args[1])
     if session in state["recorders"]:
         return "Already recording in this session. Use /proof stop or /proof cancel."
+    held = state["runs"].get(session)
+    if held is not None and held.get("interrupted"):
+        return "Recording not started: an interrupted guided run is stopped and held. Use /proof cancel first."
     prior = core.load_contract(_contracts_root(ctx), name)
     if prior and not rebind:
         return f"Contract {name} already exists. Use /proof rebind {name}."
@@ -239,6 +472,11 @@ def _begin(ctx, state, args, session, rebind):
         return f"No contract named {name}. Use /proof start {name}."
     recorder = core.Recorder(root=_contracts_root(ctx))
     recorder.start(name, intent=" ".join(args[2:]) or name)
+    if session in state["runs"]:
+        try:
+            _delete_run_marker(_contracts_root(ctx), session)
+        except Exception as exc:
+            return f"Recording not started: could not clear the guided run marker ({exc})."
     state["recorders"][session] = {"name": name, "recorder": recorder}
     state["runtime"].pop(session, None)
     state["buffers"].pop(session, None)
@@ -379,6 +617,10 @@ def _guided_run(ctx, state, session, rest, contract):
         )
     except (guided.GuidedError, core.ContractError) as exc:
         return f"Run not started: {exc}"
+    try:
+        _write_run_marker(_contracts_root(ctx), session, run)
+    except (core.ContractError, OSError, ValueError, TypeError, KeyError) as exc:
+        return f"Run not started: could not persist the run marker ({exc})."
     state["runs"][session] = run
     bound = ", ".join(
         f"{key}={value}" for key, value in run["plan"]["inputs"].items()
@@ -492,8 +734,12 @@ def _handle(ctx, raw_args: str, session_id: str = "default", session_key=None, p
             if cmd == "stop" and len(args) == 1:
                 return _finish(ctx, state, session)
             if cmd == "cancel" and len(args) == 1:
+                try:
+                    _delete_run_marker(_contracts_root(ctx), session)
+                except Exception as exc:
+                    return f"Cancellation failed: could not remove the guided run marker ({exc})."
                 _clear_session(state, session)
-                return "Recording cancelled in this session. Existing contracts are unchanged."
+                return "Recording or guided run cancelled in this session. Existing contracts are unchanged."
             if cmd == "learn" and 2 <= len(args) <= 3:
                 return _learn(ctx, state, args, session)
             if cmd == "unbind" and len(args) == 2:
@@ -557,6 +803,7 @@ def register(ctx):
     )
     try:
         root = _contracts_root(ctx)
+        _load_run_markers(root, ctx._proof_run_state)
         store = WorkflowStore(root)
         if hasattr(ctx, "register_tool_authorizer"):
             ctx.register_tool_authorizer(hostport.make_legacy_authorizer(ctx, store))

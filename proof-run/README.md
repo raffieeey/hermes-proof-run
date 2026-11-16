@@ -102,6 +102,6 @@ Workflow execution needs the checked-execution host patch in [docs/host-integrat
 - Only the procedure's action tools are gated, and only in the run's session. Reads are advisory unless pinned, except values a later action reuses from a read, which must come from a fresh matching read.
 - Step success is the absence of an error result, not a content match, so result text is never compared.
 - The follower must reproduce each action's arguments itself; very large arguments are a poor fit.
-- Run state is in memory. A plugin reload ends enforcement, and a lost run enforces nothing.
+- A plugin reload does not resume a run. A durable marker re-arms it as stopped and held, blocking its action tools until `/proof cancel`; markers older than 24 hours are ignored and removed.
 - A demonstration with a failed call cannot be saved; record a clean run.
 - The strict guard and the checked-execution workflow engine are unchanged and separate from guided runs.
