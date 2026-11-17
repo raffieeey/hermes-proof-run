@@ -47,7 +47,7 @@ cd proof-run
 PYTHONPATH=. python3 -m unittest discover -s tests -v
 ```
 
-The v0.3.1 preparation commit `9de5f4e` had 187 passing plugin behaviour tests. Five catalog-folder checks brought the suite to 192, and the later fidelity and fail-closed fixes bring it to 218 tests: 213 plugin behaviour tests and 5 catalog-folder checks; see the current verification section above. Passing GitHub Actions on a tag is the public record for that release. Do not reuse the historical 34 as a current local count.
+The v0.3.1 preparation commit `9de5f4e` had 187 passing plugin behaviour tests. Five catalog-folder checks brought the suite to 192, and the later fidelity and fail-closed fixes bring it to 221 tests: 216 plugin behaviour tests and 5 catalog-folder checks; see the current verification section above. Passing GitHub Actions on a tag is the public record for that release. Do not reuse the historical 34 as a current local count.
 
 ## 3. Patched host integration
 

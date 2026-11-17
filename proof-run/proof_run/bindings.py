@@ -7,6 +7,7 @@ successful matching read in that run.
 from __future__ import annotations
 
 import copy
+import json
 import re
 import time
 
@@ -54,7 +55,13 @@ def _candidates(step: dict) -> list[dict]:
             continue
         if isinstance(value, str) and len(value) < MIN_STRING:
             continue
-        key = (predicate["tool"], predicate["field"], type(value).__name__, repr(value))
+        key = (
+            predicate["tool"],
+            json.dumps(predicate.get("args_match") or {}, sort_keys=True, default=str),
+            predicate["field"],
+            type(value).__name__,
+            repr(value),
+        )
         order += 1
         seen[key] = {
             "tool": predicate["tool"],
@@ -80,10 +87,12 @@ def _eligible(candidate: dict, key: str | None) -> bool:
 
 
 def _unique(candidates: list[dict]) -> list[dict]:
+    """Identity includes the read arguments: equal values from two reads differ."""
     seen: dict[tuple, dict] = {}
     for candidate in candidates:
         key = (
             candidate["tool"],
+            json.dumps(candidate.get("args") or {}, sort_keys=True, default=str),
             candidate["field"],
             type(candidate["recorded"]).__name__,
             repr(candidate["recorded"]),
@@ -93,14 +102,47 @@ def _unique(candidates: list[dict]) -> list[dict]:
 
 
 def _prefer_field(candidates: list[dict], key: str | None) -> list[dict]:
-    """Keep candidates whose field matches the argument key, when any do."""
+    """Rank candidates by how well their field name matches the argument key.
+
+    An exact name wins. Otherwise shared tokens decide: ``expected_version`` is
+    served by ``stock_version`` before ``source_revision``.
+    """
     if key is None:
         return candidates
     exact = [c for c in candidates if c.get("field") == key]
-    return exact or candidates
+    if exact:
+        return exact
+    wanted = set(str(key).lower().split("_"))
+    scored = [
+        (len(wanted & set(str(c.get("field", "")).lower().split("_"))), c)
+        for c in candidates
+    ]
+    best = max((score for score, _c in scored), default=0)
+    if best <= 0:
+        return candidates
+    return [c for score, c in scored if score == best]
 
 
-def _bind_value(value, candidates: list[dict], used: list[dict], key: str | None = None):
+def _disambiguate(candidates: list[dict], siblings) -> list[dict]:
+    """Prefer reads whose own arguments agree with the action's other fields.
+
+    Two requests can both recorded quantity 5. The action also carries a
+    request id, so the candidate read with that same request id is the source.
+    """
+    if not isinstance(siblings, dict) or not siblings:
+        return candidates
+    agreed = [
+        candidate
+        for candidate in candidates
+        if any(
+            key in siblings and siblings[key] == value
+            for key, value in (candidate.get("args") or {}).items()
+        )
+    ]
+    return agreed or candidates
+
+
+def _bind_value(value, candidates: list[dict], used: list[dict], key: str | None = None, siblings=None):
     if isinstance(value, str):
         strings = [
             c for c in candidates
@@ -108,16 +150,35 @@ def _bind_value(value, candidates: list[dict], used: list[dict], key: str | None
         ]
         if not strings:
             return value
-        # One candidate per recorded value; a field matching the argument key wins
-        # over a coincident value from another read.
-        by_value: dict[str, dict] = {}
+        # One candidate per recorded value. A field matching the argument key wins;
+        # if more than one read still matches, refuse instead of guessing a source.
+        grouped: dict[str, list[dict]] = {}
         for candidate in strings:
-            recorded = candidate["recorded"]
-            previous = by_value.get(recorded)
-            if previous is None or (
-                key is not None and candidate["field"] == key and previous["field"] != key
-            ):
-                by_value[recorded] = candidate
+            grouped.setdefault(candidate["recorded"], []).append(candidate)
+        by_value: dict[str, dict] = {}
+        for recorded, group in grouped.items():
+            # Field-name agreement first: ``expected_version`` belongs to the
+            # stock read, not to a request lookup that also returned the value.
+            pool = _prefer_field(group, key)
+            pool = _disambiguate(pool, siblings)
+            unique = _unique(pool)
+            if len(unique) > 1:
+                names = {c["field"] for c in unique}
+                stable = not any(_VOLATILE.search(str(c["field"])) for c in unique)
+                if stable and len(names) == 1:
+                    # Same immutable field and value from several reads (a SKU
+                    # returned by both the lookup and the stock read): any source
+                    # yields the same value, so keep the newest.
+                    unique = [max(unique, key=lambda c: c.get("order", 0))]
+                else:
+                    fields = ", ".join(
+                        sorted({f"{c['tool']}.{c['field']}" for c in unique})
+                    )
+                    raise BindingError(
+                        f"the value {recorded!r} could come from more than one read "
+                        f"({fields}); record distinct values or review the procedure"
+                    )
+            by_value[recorded] = unique[0]
         chosen = sorted(by_value.values(), key=lambda c: len(c["recorded"]), reverse=True)
         chosen.sort(key=lambda c: value.find(c["recorded"]))
         parts: list = []
@@ -137,15 +198,18 @@ def _bind_value(value, candidates: list[dict], used: list[dict], key: str | None
             parts.append(value[position:])
         return {"$proof": "concat", "parts": parts}
     if isinstance(value, list):
-        return [_bind_value(item, candidates, used, key) for item in value]
+        return [_bind_value(item, candidates, used, key, siblings) for item in value]
     if isinstance(value, dict):
-        return {item_key: _bind_value(item, candidates, used, item_key) for item_key, item in value.items()}
+        return {
+            item_key: _bind_value(item, candidates, used, item_key, value)
+            for item_key, item in value.items()
+        }
     if isinstance(value, bool):
         matches = [
             c for c in candidates
             if type(c["recorded"]) is bool and c["recorded"] is value and _eligible(c, key)
         ]
-        return _bind_scalar(value, matches, used, key)
+        return _bind_scalar(value, matches, used, key, siblings)
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         matches = [
             c for c in candidates
@@ -154,15 +218,15 @@ def _bind_value(value, candidates: list[dict], used: list[dict], key: str | None
             and c["recorded"] == value
             and _eligible(c, key)
         ]
-        return _bind_scalar(value, matches, used, key)
+        return _bind_scalar(value, matches, used, key, siblings)
     return value
 
 
-def _bind_scalar(value, matches: list[dict], used: list[dict], key: str | None):
+def _bind_scalar(value, matches: list[dict], used: list[dict], key: str | None, siblings=None):
     """Bind one scalar to exactly one read field, or refuse an ambiguous map."""
     if not matches:
         return value
-    unique = _unique(_prefer_field(matches, key))
+    unique = _unique(_disambiguate(_prefer_field(matches, key), siblings))
     if len(unique) == 1:
         used.append(unique[0])
         return _slot(unique[0])

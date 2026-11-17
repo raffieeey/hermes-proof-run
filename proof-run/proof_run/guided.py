@@ -336,40 +336,46 @@ def build_procedure(snapshot: dict, pairs) -> dict:
     procedure_steps = []
     order_by_step = snapshot.get("read_order_by_step") or []
     for step_index, step in enumerate(steps):
-        reads: list[dict] = []
-        last_key = None
-        last_group = None
         predicates = step.get("preconditions") or []
         if step_index < len(order_by_step) and order_by_step[step_index]:
             # Ordered read history: a value read again is listed again, which is
             # how the guide can tell a follower to re-read before an action.
             predicates = order_by_step[step_index]
+        events: list[dict] = []
         for predicate in predicates:
             tool = predicate["tool"]
             args = predicate.get("args_match") or {}
             key = tool + "\0" + _canonical(args)
-            # Merge only consecutive facts from the same read. A read repeated
-            # after a different read is a re-read: keep it as its own entry so
-            # the guide preserves the order the teacher actually used.
-            group = last_group if key == last_key else None
-            if group is None:
-                group = {
-                    "tool": tool,
-                    "args": _template(args, slots),
-                    "facts": [],
-                }
-                reads.append(group)
-            last_key, last_group = key, group
-            value = predicate.get("value")
-            if predicate.get("op") != "sha256==":
-                value = _template(value, slots)
-            group["facts"].append(
-                {
-                    "field": predicate["field"],
-                    "op": predicate["op"],
-                    "value": value,
-                }
-            )
+            if events and events[-1]["key"] == key:
+                events[-1]["predicates"].append(predicate)
+            else:
+                events.append(
+                    {"key": key, "tool": tool, "args": args, "predicates": [predicate]}
+                )
+        latest = {event["key"]: position for position, event in enumerate(events)}
+        reads: list[dict] = []
+        for position, event in enumerate(events):
+            group = {
+                "tool": event["tool"],
+                "args": _template(event["args"], slots),
+                "facts": [],
+            }
+            # Only the newest read of a key carries enforceable facts. Earlier
+            # entries stay in the guide as ordered history, so a pin cannot
+            # demand two different values of the same live field.
+            if latest[event["key"]] == position:
+                for predicate in event["predicates"]:
+                    value = predicate.get("value")
+                    if predicate.get("op") != "sha256==":
+                        value = _template(value, slots)
+                    group["facts"].append(
+                        {
+                            "field": predicate["field"],
+                            "op": predicate["op"],
+                            "value": value,
+                        }
+                    )
+            reads.append(group)
         args_template, used = step_templates[step_index]
         procedure_steps.append(
             {
@@ -833,9 +839,11 @@ def guide_text(run: dict) -> str:
         f"Proof Run guided run '{run['name']}' (contract v{run.get('version')}), "
         f"step {index + 1} of {total}.",
         f"Bound inputs: {inputs or 'none'}.",
-        "Procedure, in order (do only the step marked NOW). Perform each step's "
-        "reads in the order shown, immediately before that step; a value read "
-        "before a later read may be stale.",
+        "Procedure, in order. Perform each step's reads in the order shown, "
+        "immediately before that step; a value read before a later read may be "
+        "stale. A step marked NOW is the next one to perform: after it succeeds, "
+        "continue with the next step even though this text still says NOW, "
+        "because it is refreshed only on the next user turn.",
     ]
     for position, item in enumerate(plan["steps"]):
         if position < index:
