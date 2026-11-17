@@ -229,7 +229,9 @@ class RunLog:
             if context:
                 self.guide_turns += 1
                 if self.guide_first is None:
-                    self.guide_first = str(context)[:2400]
+                    # Keep the whole guide: the A/B record must show exactly what
+                # the follower was told, not a preview.
+                self.guide_first = str(context)
         state = self.host.run_state(self.session)
         if state is not None:
             self.last_state = state
@@ -378,6 +380,7 @@ def judge(task, instance, target, measured: dict, log_: RunLog, budget: int, arm
         "rejection_codes": [item["code"] for item in rejections][:6],
         "gate_blocks": log_.blocks,
         "guide_turns": log_.guide_turns,
+        "guide_first": log_.guide_first,
         "final_state": {k: v for k, v in target.snapshot().items() if k in ("reservations", "finished", "holds", "stock")},
         "trace": log_.trace,
     }

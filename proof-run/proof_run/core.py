@@ -545,6 +545,8 @@ class Recorder:
                 "contract_id": contract_id,
                 "intent": intent,
                 "reads": {},
+                "read_order": [],
+                "read_order_by_step": [],
                 "steps": [],
                 "count": 0,
                 "rejected": False,
@@ -577,6 +579,10 @@ class Recorder:
                                 _predicate("tool_fact", tool, field, value, args)
                             )
                     active["reads"][fact_key(tool, args)] = predicates
+                    # Ordered history for guided procedures only. A re-read after
+                    # another read shows the earlier value was stale; the strict
+                    # contract keeps latest-wins semantics in ``reads`` above.
+                    active["read_order"].extend(copy.deepcopy(p) for p in predicates)
                     return
                 if (
                     not isinstance(parsed, dict)
@@ -604,7 +610,9 @@ class Recorder:
                         "success_evidence": evidence,
                     }
                 )
+                active["read_order_by_step"].append(copy.deepcopy(active["read_order"]))
                 active["reads"] = {}
+                active["read_order"] = []
             except (ContractError, TypeError, ValueError, RecursionError):
                 active["rejected"] = True
                 raise ContractError(
@@ -623,6 +631,7 @@ class Recorder:
                 "count": active["count"],
                 "rejected": active["rejected"],
                 "steps": copy.deepcopy(active["steps"]),
+                "read_order_by_step": copy.deepcopy(active["read_order_by_step"]),
             }
 
     def stop(
