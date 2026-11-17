@@ -49,6 +49,7 @@ import plugin_host  # noqa: E402
 import task_set as T  # noqa: E402
 
 ARMS = ("guided", "unguided")
+TEACH_ATTEMPTS = 3
 SCHEMA = 1
 CLAIM_CEILING = (
     "One synthetic inventory target, a fixed task set, and one teacher/follower pair. The interval "
@@ -409,8 +410,8 @@ class Bench:
             CURRENT.update(target=None, log=None, session=None)
         return judge(task, instance, target, measured, run_log, budget, arm) | {"_log": run_log}
 
-    def teach(self, task) -> tuple[dict, dict | None]:
-        instance = T.make_instance(task, "teacher", 0)
+    def teach(self, task, attempt: int = 0) -> tuple[dict, dict | None]:
+        instance = T.make_instance(task, "teacher", attempt)
         session = f"bench-{self.run_id}-teach-{task.id}"
         name = f"bench-{task.id}"
         started = self.host.proof(f"start {name} fulfil inventory requests", session)
@@ -638,7 +639,13 @@ def _main(args) -> int:
     try:
         for index, task in enumerate(tasks):
             log(f"[{index + 1}/{len(tasks)}] teaching {task.id} ({task.band})")
-            record, teacher_instance = bench.teach(task)
+            record, teacher_instance = None, None
+            for attempt in range(TEACH_ATTEMPTS):
+                record, teacher_instance = bench.teach(task, attempt)
+                if teacher_instance is not None:
+                    break
+                log(f"    attempt {attempt + 1}/{TEACH_ATTEMPTS} not saved")
+            record["teaching_attempts"] = attempt + 1
             teaching.append(record)
             log(f"    demo passed={record.get('demonstration_passed')} saved={record.get('saved')} {record.get('failure_reason', '')[:100]}")
             save(False)
