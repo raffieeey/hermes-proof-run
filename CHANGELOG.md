@@ -13,7 +13,7 @@
 
 ### Verification
 
-- The post-fix A/B run (12 tasks, three runs per arm, `deepseek-v4.1-flash` follower, `gpt-6-luna` teacher) put guided at 36/36 and unguided at 35/36 (+2.8 points, 95% interval -7.1 to +14.2), with 12/12 procedures saved and no gate blocks. The set is at ceiling, so this does not demonstrate superiority. Record: `benchmarks/live-guided/results-2026-11-17-post-fix.json`.
+- The post-fix A/B run (12 tasks, three runs per arm, `deepseek-v4.1-flash` follower, `gpt-6-luna` teacher) put guided at 36/36 and unguided at 35/36 (+2.8 points, 95% interval -7.1 to +14.2), with 72/72 planned runs executed, 12/12 procedures saved, 15 teaching attempts (3 failed) counted, and no gate blocks. The set is at ceiling, so this does not demonstrate superiority. Record: `benchmarks/live-guided/results-2026-11-17-final.json`.
 
 ## [0.3.2] - 2026-11-17
 

@@ -134,18 +134,21 @@ What the traces show. These are observations from the record, not an experiment 
 ### Result after the fidelity fixes (2026-11-17, second run)
 
 The same 12 tasks ran again after the guided-run fixes: follower `deepseek-v4.1-flash`, teacher
-`gpt-6-luna`, three runs per arm per task, **12/12 procedures saved**. Teaching is retried up to
-three times because the recorder refuses a demonstration that contains a failed call. Record:
-[`results-2026-11-17-post-fix.json`](results-2026-11-17-post-fix.json).
+`gpt-6-luna`, three runs per arm per task. **Coverage 72/72 planned runs; 12/12 procedures saved.**
+Teaching is retried up to three times because the recorder refuses a demonstration that contains a
+failed call; all 15 attempts (3 failed) are recorded and costed. Record:
+[`results-2026-11-17-final.json`](results-2026-11-17-final.json).
 
 | Arm | n | Passed | Pass rate (95% Wilson) | Reported tokens |
 |---|---:|---:|---|---:|
-| Guided | 36 | 36 | 100.0% (90.4 to 100.0) | 1,088,783 |
-| Unguided | 36 | 35 | 97.2% (85.8 to 99.5) | 778,683 |
+| Guided | 36 | 36 | 100.0% (90.4 to 100.0) | 1,072,295 |
+| Unguided | 36 | 35 | 97.2% (85.8 to 99.5) | 787,288 |
 
 Difference **+2.8 points, 95% interval -7.1 to +14.2** (Fisher p = 1.0). The guided arm had no
-gate blocks and no target rejections; the single unguided failure never closed its request.
-Guided used 39.8% more reported tokens.
+gate blocks and no target rejections; the single unguided failure used the `place_hold` distractor
+instead of reserving. Guided used 36.2% more reported tokens. The earlier post-fix record
+(`results-2026-11-17-post-fix.json`) reported 36/35 on the same arms before the accounting and
+binding repairs; the numbers differ slightly because the follower runs are not deterministic.
 
 Reading: no read-order failure, blocked retry or target rejection appeared in these 36 guided
 runs, and every procedure saved. That is an observation about this sample, not a guarantee: the
