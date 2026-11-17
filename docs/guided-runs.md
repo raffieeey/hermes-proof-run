@@ -125,3 +125,5 @@ Measured results reported for the seven follower runs:
 - unguided: 3/3 passed, 6 model API calls each, 16,707 to 16,733 reported total tokens
 
 This is one small task with four guided and three unguided samples. The recorded results do not prove general superiority, token savings after teaching cost, or model quality. Unit tests cover the live-binding mechanism; the aggregate live-run data does not verify which fresh values the follower used. A larger and more varied benchmark is still required before making a performance claim.
+
+A committed, repeatable guided-versus-unguided benchmark now lives in `benchmarks/live-guided/` (a 12-task set, a driver, a checker over the target's final state, and Wilson intervals). It has not been run live yet, so the claim above is unchanged; see its README for status and the findings from building it.
