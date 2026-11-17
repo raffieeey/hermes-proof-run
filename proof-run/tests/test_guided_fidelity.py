@@ -208,6 +208,72 @@ class ReadHistoryFactsTests(GuidedCase):
         self.assertEqual(versions, [8])
 
 
+class ConsecutiveRereadTests(GuidedCase):
+    def test_back_to_back_rereads_stay_separate_and_pin_only_the_last(self):
+        h = self.host
+        h.proof("start stock", "teach")
+        self.ran(
+            "inventory_read", {"sku": "A1"},
+            {"available": 9, "stock_version": 7, "snapshot_token": "tok-a"}, "teach",
+        )
+        self.ran(
+            "inventory_read", {"sku": "A1"},
+            {"available": 9, "stock_version": 8, "snapshot_token": "tok-b"}, "teach",
+        )
+        self.ran(
+            "reserve_stock",
+            {"sku": "A1", "expected_version": 8, "snapshot_token": "tok-b"},
+            {"committed": True}, "teach",
+        )
+        self.assertIn("saved (v", h.proof("save sku=A1", "teach"))
+
+        contract = json.loads((self.root / "contracts" / "stock.json").read_text())
+        reads = contract["procedure"]["steps"][0]["reads"]
+        self.assertEqual(len(reads), 2, "two read calls must stay two entries")
+        self.assertEqual(reads[0]["facts"], [])
+        versions = [
+            fact["value"] for fact in reads[1]["facts"] if fact["field"] == "stock_version"
+        ]
+        self.assertEqual(versions, [8])
+
+
+class SameStringTwoReadsTests(GuidedCase):
+    def test_equal_skus_from_two_requests_bind_by_the_matching_request_id(self):
+        h = self.host
+        h.proof("start pair", "teach")
+        self.ran(
+            "request_lookup", {"request_id": "REQ-L"},
+            {"request_id": "REQ-L", "sku": "SKU-SAME", "quantity": 2}, "teach",
+        )
+        self.ran(
+            "request_lookup", {"request_id": "REQ-R"},
+            {"request_id": "REQ-R", "sku": "SKU-SAME", "quantity": 3}, "teach",
+        )
+        self.ran(
+            "reserve_stock",
+            {"request_id": "REQ-L", "sku": "SKU-SAME", "quantity": 2},
+            {"committed": True}, "teach",
+        )
+        self.assertIn("saved (v", h.proof("save request_id=REQ-L", "teach"))
+
+        h.proof("run pair request_id=REQ-L2", "run")
+        self.ran(
+            "request_lookup", {"request_id": "REQ-L2"},
+            {"request_id": "REQ-L2", "sku": "SKU-LEFT", "quantity": 2}, "run",
+        )
+        blocked = self.blocked(
+            "reserve_stock",
+            {"request_id": "REQ-L2", "sku": "SKU-RIGHT", "quantity": 2},
+            {"committed": True}, "run",
+        )
+        self.assertIn('"sku": "SKU-LEFT"', blocked)
+        self.ran(
+            "reserve_stock",
+            {"request_id": "REQ-L2", "sku": "SKU-LEFT", "quantity": 2},
+            {"committed": True}, "run",
+        )
+
+
 class CoincidentValueBindingTests(GuidedCase):
     """quantity and available share a value during the demonstration."""
 

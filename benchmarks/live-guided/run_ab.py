@@ -473,6 +473,7 @@ class Bench:
 
 def summarize(teaching: list[dict], runs: list[dict]) -> dict:
     by_arm = {arm: [r for r in runs if r["arm"] == arm] for arm in ARMS}
+    attempts = [a for task in teaching for a in (task.get("attempts") or [task])]
     summary: dict = {
         "arms": {arm: ab_stats.arm_summary(by_arm[arm]) for arm in ARMS},
         "comparison": ab_stats.compare(by_arm["guided"], by_arm["unguided"]),
@@ -483,10 +484,17 @@ def summarize(teaching: list[dict], runs: list[dict]) -> dict:
             "tasks_taught": len(teaching),
             "demonstrations_passed": sum(1 for t in teaching if t.get("demonstration_passed")),
             "procedures_saved": sum(1 for t in teaching if t.get("saved")),
-            "api_calls": ab_stats.describe([t["api_calls"] for t in teaching if "api_calls" in t]),
-            "total_tokens": ab_stats.describe([t["total_tokens"] for t in teaching if "total_tokens" in t]),
-            "wall_s": ab_stats.describe([t["wall_s"] for t in teaching if "wall_s" in t]),
-            "note": "Teaching cost is reported on its own and is not amortised over the follower runs.",
+            "attempts": len(attempts),
+            "attempts_failed": sum(1 for a in attempts if not a.get("saved")),
+            "api_calls": ab_stats.describe([a["api_calls"] for a in attempts if "api_calls" in a]),
+            "total_tokens": ab_stats.describe(
+                [a["total_tokens"] for a in attempts if "total_tokens" in a]
+            ),
+            "wall_s": ab_stats.describe([a["wall_s"] for a in attempts if "wall_s" in a]),
+            "note": (
+                "Every teaching attempt is counted, including failed ones. Teaching cost is "
+                "reported on its own and is not amortised over the follower runs."
+            ),
         },
     }
     for band in T.BANDS:
@@ -526,6 +534,14 @@ def build_record(args, tasks, teaching, runs, complete: bool, started_at: str, f
             if selftest
             else CLAIM_CEILING
         ),
+        "coverage": {
+            "planned_runs": len(tasks) * len(ARMS) * args.runs_per_arm,
+            "executed_runs": len(runs),
+            "missing_runs": len(tasks) * len(ARMS) * args.runs_per_arm - len(runs),
+            "tasks_without_procedure": [
+                item["task"] for item in teaching if not item.get("saved")
+            ],
+        },
         "config": {
             "follower_model": args.model,
             "teacher_model": args.teacher_model,
@@ -534,7 +550,7 @@ def build_record(args, tasks, teaching, runs, complete: bool, started_at: str, f
             "runs_per_arm_per_task": args.runs_per_arm,
             "call_budget": args.call_budget or "per task: 5 x requests + 1 closing reply + 4 slack",
             "budgets": {t.id: (args.call_budget or t.call_budget()) for t in tasks},
-            "retries": "none by the driver; the host's per-call retry is set to one attempt",
+            "retries": "no follower retry; teaching is attempted up to 3 times and every attempt is recorded",
             "teacher_note": "the teacher sees the order rules in its prompt; followers never do",
             "plugin_version": version.group(1) if version else None,
             "repo": git_head(root),
@@ -640,12 +656,15 @@ def _main(args) -> int:
         for index, task in enumerate(tasks):
             log(f"[{index + 1}/{len(tasks)}] teaching {task.id} ({task.band})")
             record, teacher_instance = None, None
+            attempts: list[dict] = []
             for attempt in range(TEACH_ATTEMPTS):
                 record, teacher_instance = bench.teach(task, attempt)
+                attempts.append({k: v for k, v in record.items() if k != "trace"})
                 if teacher_instance is not None:
                     break
                 log(f"    attempt {attempt + 1}/{TEACH_ATTEMPTS} not saved")
             record["teaching_attempts"] = attempt + 1
+            record["attempts"] = attempts
             teaching.append(record)
             log(f"    demo passed={record.get('demonstration_passed')} saved={record.get('saved')} {record.get('failure_reason', '')[:100]}")
             save(False)
@@ -662,9 +681,28 @@ def _main(args) -> int:
         log("interrupted: partial results kept (complete=false)")
         save(False)
         return 130
-    save(True)
+    planned = len(tasks) * len(ARMS) * args.runs_per_arm
+    missing_tasks = [item["task"] for item in teaching if not item.get("saved")]
+    coverage_ok = len(runs) == planned and not missing_tasks
+    save(coverage_ok)
     record = json.loads(out.read_text(encoding="utf-8"))
-    print(json.dumps({"out": str(out), "complete": True, "summary": record["summary"]}, sort_keys=False))
+    print(
+        json.dumps(
+            {
+                "out": str(out),
+                "complete": coverage_ok,
+                "coverage": record["coverage"],
+                "summary": record["summary"],
+            },
+            sort_keys=False,
+        )
+    )
+    if not coverage_ok:
+        log(
+            f"incomplete: {len(runs)}/{planned} planned runs executed; "
+            f"tasks without a saved procedure: {missing_tasks or 'none'}"
+        )
+        return 2
     return 0
 
 

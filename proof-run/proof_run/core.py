@@ -579,10 +579,10 @@ class Recorder:
                                 _predicate("tool_fact", tool, field, value, args)
                             )
                     active["reads"][fact_key(tool, args)] = predicates
-                    # Ordered history for guided procedures only. A re-read after
-                    # another read shows the earlier value was stale; the strict
-                    # contract keeps latest-wins semantics in ``reads`` above.
-                    active["read_order"].extend(copy.deepcopy(p) for p in predicates)
+                    # Ordered history for guided procedures only: one entry per
+                    # read call, so adjacent identical reads stay separate. The
+                    # strict contract keeps latest-wins semantics in ``reads``.
+                    active["read_order"].append(copy.deepcopy(list(predicates)))
                     return
                 if (
                     not isinstance(parsed, dict)

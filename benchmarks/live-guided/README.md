@@ -115,7 +115,8 @@ What the traces show. These are observations from the record, not an experiment 
   lookup in six runs on `f01`, `f02` and `o04` and never on the other nine tasks; unguided
   followers did so only on `o01`. The earlier finding that the guide's "Required before this
   action" list names `inventory_read` before `request_lookup` fits this, but the results file does
-  not store the guide text the followers saw, so that link is an inference.
+  run did not store the guide text the followers saw. Later runs write every guided run's first
+  guide to `guide_first`, so the same question can be checked directly.
 - **All three unguided failures are one task and one omission.** On `s04-one-unit` the prompt
   is `Fulfil <request> (<sku>).` and does not ask to close the task. All three unguided followers
   reserved, read back, and replied in text without calling `finish_task`, which the checker
@@ -146,10 +147,13 @@ Difference **+2.8 points, 95% interval -7.1 to +14.2** (Fisher p = 1.0). The gui
 gate blocks and no target rejections; the single unguided failure never closed its request.
 Guided used 39.8% more reported tokens.
 
-Reading: the failures the first run exposed are gone — no read-order failures, no blocked retries,
-every procedure saved. The set is at ceiling for this follower (11 of 12 tasks went 3/3 in both
-arms), so it still cannot show that guidance is better. It now shows the guide is not worse and
-that it removes a failure class on the task whose prompt omits the closing step.
+Reading: no read-order failure, blocked retry or target rejection appeared in these 36 guided
+runs, and every procedure saved. That is an observation about this sample, not a guarantee: the
+gate still cannot enforce read order, and a follower that reads before the lookup is still
+stopped (a test pins that behaviour). The interval includes zero and a 14-point increase, so
+non-inferiority is not established. The teacher and follower also differ from the first run, so
+this is not a controlled before/after of the code change. The set is at ceiling for this follower
+(11 of 12 tasks went 3/3 in both arms); it still cannot show that guidance is better.
 
 ### Claim ceiling after the A/B run
 
@@ -330,8 +334,8 @@ Observed with the plugin at `fa4085b`. Two were fixed afterwards; one remains.
    refused with no state change stop a guided run, and should the guide or gate carry the
    recorded read order? Then re-run `f01`, `f02` and `o04` with many more runs per arm than 3,
    because 1/3 and 0/3 cannot say how often the stop happens.
-2. Make the record able to check the cause. The driver captures the guide text each follower saw
-   (`RunLog.guide_first`) but does not write it to the results, so why the guided follower read
+2. Make the record able to check the cause. The driver now writes the complete guide each guided
+   follower saw (`guide_first`) into the results, so why a guided follower read
    first is an inference. Also leave the output file out of `repo.dirty`.
 3. Add the third arm: the teacher note as plain text in the follower's prompt, so a saved
    procedure is compared with the same rules written down and not with nothing.

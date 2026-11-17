@@ -16,7 +16,7 @@ git diff --check
 python3 scripts/verify_host.py --host-source /home/afifah/.hermes/hermes-agent --output "$HOME/proof-run-host-verification.json"
 ```
 
-Results: 217 tests passed: 212 plugin behaviour tests and 5 catalog-folder checks. For history, the v0.3.1 preparation commit `9de5f4e` had 187 tests (all plugin behaviour) and the audit tree had 192 (187 plugin behaviour plus the 5 catalog-folder checks). The benchmark suite passed 10 tests; offline replay verified 39 responses across 8 identical target-state replays. `compileall` and `git diff --check` passed. The host verifier ran in-process against host checkout `e96221fa73d2dac7ba9f3bc5a8b866b3d0fc188e` and returned `total=25`, `passed=25`, `failed=0`, `network_attempts=0`. The host checkout had no tracked modifications; untracked files were present. The checked-in receipt [host-verification-2026-11-16.json](host-verification-2026-11-16.json) was committed before the fail-closed fixes (`4742fd9`); the re-run on this tree passed the same 25 probes and its output was not committed.
+Results: 223 tests passed: 218 plugin behaviour tests and 5 catalog-folder checks. For history, the v0.3.1 preparation commit `9de5f4e` had 187 tests (all plugin behaviour) and the audit tree had 192 (187 plugin behaviour plus the 5 catalog-folder checks). The benchmark suite passed 10 tests; offline replay verified 39 responses across 8 identical target-state replays. `compileall` and `git diff --check` passed. The host verifier ran in-process against host checkout `e96221fa73d2dac7ba9f3bc5a8b866b3d0fc188e` and returned `total=25`, `passed=25`, `failed=0`, `network_attempts=0`. The host checkout had no tracked modifications; untracked files were present. The checked-in receipt [host-verification-2026-11-16.json](host-verification-2026-11-16.json) was committed before the fail-closed fixes (`4742fd9`); the re-run on this tree passed the same 25 probes and its output was not committed.
 
 Coverage is distinct by layer: the plugin and benchmark suites are local automated tests; `scripts/verify_host.py` exercises the real Hermes loader, plugin commands/hooks and synthetic tool paths in temporary profile homes. Its audit hook blocks Python `socket.connect` attempts; the receipt records zero attempts. It is not the patched checked-execution workflow journey or a live gateway test. No model call, production action, or live Telegram reply was tested; no Telegram reply is claimed.
 
@@ -47,7 +47,7 @@ cd proof-run
 PYTHONPATH=. python3 -m unittest discover -s tests -v
 ```
 
-The v0.3.1 preparation commit `9de5f4e` had 187 passing plugin behaviour tests. Five catalog-folder checks brought the suite to 192, and the later fidelity and fail-closed fixes bring it to 221 tests: 216 plugin behaviour tests and 5 catalog-folder checks; see the current verification section above. Passing GitHub Actions on a tag is the public record for that release. Do not reuse the historical 34 as a current local count.
+The v0.3.1 preparation commit `9de5f4e` had 187 passing plugin behaviour tests. Five catalog-folder checks brought the suite to 192, and the later fidelity and fail-closed fixes bring it to 223 tests: 218 plugin behaviour tests and 5 catalog-folder checks; see the current verification section above. Passing GitHub Actions on a tag is the public record for that release. Do not reuse the historical 34 as a current local count.
 
 ## 3. Patched host integration
 

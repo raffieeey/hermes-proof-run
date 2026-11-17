@@ -124,22 +124,28 @@ def _prefer_field(candidates: list[dict], key: str | None) -> list[dict]:
 
 
 def _disambiguate(candidates: list[dict], siblings) -> list[dict]:
-    """Prefer reads whose own arguments agree with the action's other fields.
+    """Prefer reads whose own arguments agree most with the action's fields.
 
-    Two requests can both recorded quantity 5. The action also carries a
-    request id, so the candidate read with that same request id is the source.
+    Two requests can both record quantity 5. The action carries a request id and
+    a SKU, so the lookup agreeing on both is the source; a stock read that
+    agrees only on the SKU is not. A tie stays ambiguous and is refused later.
     """
     if not isinstance(siblings, dict) or not siblings:
         return candidates
-    agreed = [
-        candidate
-        for candidate in candidates
-        if any(
-            key in siblings and siblings[key] == value
-            for key, value in (candidate.get("args") or {}).items()
-        )
-    ]
-    return agreed or candidates
+    scored = []
+    for candidate in candidates:
+        score = 0
+        for key, value in (candidate.get("args") or {}).items():
+            if key in siblings and siblings[key] == value:
+                # An identifier agrees for a stronger reason than a stable
+                # attribute: the request id picks the entity, the SKU only
+                # describes it.
+                score += 2 if _VOLATILE.search(str(key)) else 1
+        scored.append((score, candidate))
+    best = max((score for score, _candidate in scored), default=0)
+    if best <= 0:
+        return candidates
+    return [candidate for score, candidate in scored if score == best]
 
 
 def _bind_value(value, candidates: list[dict], used: list[dict], key: str | None = None, siblings=None):
@@ -163,21 +169,13 @@ def _bind_value(value, candidates: list[dict], used: list[dict], key: str | None
             pool = _disambiguate(pool, siblings)
             unique = _unique(pool)
             if len(unique) > 1:
-                names = {c["field"] for c in unique}
-                stable = not any(_VOLATILE.search(str(c["field"])) for c in unique)
-                if stable and len(names) == 1:
-                    # Same immutable field and value from several reads (a SKU
-                    # returned by both the lookup and the stock read): any source
-                    # yields the same value, so keep the newest.
-                    unique = [max(unique, key=lambda c: c.get("order", 0))]
-                else:
-                    fields = ", ".join(
-                        sorted({f"{c['tool']}.{c['field']}" for c in unique})
-                    )
-                    raise BindingError(
-                        f"the value {recorded!r} could come from more than one read "
-                        f"({fields}); record distinct values or review the procedure"
-                    )
+                fields = ", ".join(
+                    sorted({f"{c['tool']}.{c['field']}" for c in unique})
+                )
+                raise BindingError(
+                    f"the value {recorded!r} could come from more than one read "
+                    f"({fields}); record distinct values or review the procedure"
+                )
             by_value[recorded] = unique[0]
         chosen = sorted(by_value.values(), key=lambda c: len(c["recorded"]), reverse=True)
         chosen.sort(key=lambda c: value.find(c["recorded"]))

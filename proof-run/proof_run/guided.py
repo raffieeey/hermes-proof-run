@@ -260,6 +260,14 @@ def _show(value) -> str:
 # saving
 
 
+def _same_read(left: dict, right: dict) -> bool:
+    return (
+        left.get("tool") == right.get("tool")
+        and _canonical(left.get("args_match") or {})
+        == _canonical(right.get("args_match") or {})
+    )
+
+
 def build_procedure(snapshot: dict, pairs) -> dict:
     """Turn a recorder snapshot into a procedure block; validates first."""
     steps = snapshot.get("steps") or []
@@ -341,17 +349,31 @@ def build_procedure(snapshot: dict, pairs) -> dict:
             # Ordered read history: a value read again is listed again, which is
             # how the guide can tell a follower to re-read before an action.
             predicates = order_by_step[step_index]
+        # Normalise to one group per read call. The recorder supplies a list of
+        # per-call lists; older snapshots and plain preconditions are flat, so
+        # consecutive facts with the same read are merged there.
+        if predicates and isinstance(predicates[0], list):
+            groups = [list(group) for group in predicates if group]
+        else:
+            groups = []
+            for predicate in predicates:
+                if groups and groups[-1] and _same_read(groups[-1][0], predicate):
+                    groups[-1].append(predicate)
+                else:
+                    groups.append([predicate])
         events: list[dict] = []
-        for predicate in predicates:
-            tool = predicate["tool"]
-            args = predicate.get("args_match") or {}
-            key = tool + "\0" + _canonical(args)
-            if events and events[-1]["key"] == key:
-                events[-1]["predicates"].append(predicate)
-            else:
-                events.append(
-                    {"key": key, "tool": tool, "args": args, "predicates": [predicate]}
-                )
+        for group in groups:
+            first = group[0]
+            tool = first["tool"]
+            args = first.get("args_match") or {}
+            events.append(
+                {
+                    "key": tool + "\0" + _canonical(args),
+                    "tool": tool,
+                    "args": args,
+                    "predicates": group,
+                }
+            )
         latest = {event["key"]: position for position, event in enumerate(events)}
         reads: list[dict] = []
         for position, event in enumerate(events):

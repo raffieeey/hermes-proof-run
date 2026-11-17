@@ -301,7 +301,7 @@ python3 -m unittest discover -s benchmarks/cloud-following-pilot -p 'test_*.py' 
 python3 benchmarks/cloud-following-pilot/replay.py
 ```
 
-At the v0.3.1 preparation tree the plugin suite had 187 tests: 146 tests at the v0.2.0 tag, 19 frozen guided-run acceptance tests, 13 persistence, validation, live-binding, hook-order, input-templating and malformed-command regression tests, and 9 durability/fail-closed regression tests. The current suite has 221 tests: 216 plugin behaviour tests and 5 catalog-folder checks. The 212 are those 187 plus 22 fail-closed regression tests (8 malformed-run-state and 14 marker load-failure tests) and 7 guide-fidelity tests. The benchmark adds 10 driver tests and offline replay of 39 responses across 8 trials. These commands make no model calls. [Verification details](docs/verification.md) document the host checks and individual evidence records.
+At the v0.3.1 preparation tree the plugin suite had 187 tests: 146 tests at the v0.2.0 tag, 19 frozen guided-run acceptance tests, 13 persistence, validation, live-binding, hook-order, input-templating and malformed-command regression tests, and 9 durability/fail-closed regression tests. The current suite has 223 tests: 218 plugin behaviour tests and 5 catalog-folder checks. The 218 are those 187 plus 22 fail-closed regression tests (8 malformed-run-state and 14 marker load-failure tests) and 9 guide-fidelity tests. The benchmark adds 10 driver tests and offline replay of 39 responses across 8 trials. These commands make no model calls. [Verification details](docs/verification.md) document the host checks and individual evidence records.
 
 ## How protection works
 

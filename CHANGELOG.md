@@ -30,7 +30,7 @@
 
 ### Verification
 
-- At release-preparation commit `9de5f4e` (2026-11-16), 187 plugin behaviour tests, 10 benchmark tests, and offline replay of 39 responses across 8 trials passed. The suite has since grown to 221 tests: 216 plugin behaviour tests and 5 catalog-folder checks. The real-host verifier passed 25/25 probes with zero network attempts; the detailed receipt is `docs/host-verification-2026-11-16.json`.
+- At release-preparation commit `9de5f4e` (2026-11-16), 187 plugin behaviour tests, 10 benchmark tests, and offline replay of 39 responses across 8 trials passed. The suite has since grown to 223 tests: 218 plugin behaviour tests and 5 catalog-folder checks. The real-host verifier passed 25/25 probes with zero network attempts; the detailed receipt is `docs/host-verification-2026-11-16.json`.
 
 ## [0.3.0] - 2026-11-14
 
