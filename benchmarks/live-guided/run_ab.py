@@ -230,8 +230,8 @@ class RunLog:
                 self.guide_turns += 1
                 if self.guide_first is None:
                     # Keep the whole guide: the A/B record must show exactly what
-                # the follower was told, not a preview.
-                self.guide_first = str(context)
+                    # the follower was told, not a preview.
+                    self.guide_first = str(context)
         state = self.host.run_state(self.session)
         if state is not None:
             self.last_state = state
