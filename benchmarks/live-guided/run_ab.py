@@ -378,6 +378,7 @@ def judge(task, instance, target, measured: dict, log_: RunLog, budget: int, arm
         "rejection_codes": [item["code"] for item in rejections][:6],
         "gate_blocks": log_.blocks,
         "guide_turns": log_.guide_turns,
+        "guide_first": log_.guide_first,
         "final_state": {k: v for k, v in target.snapshot().items() if k in ("reservations", "finished", "holds", "stock")},
         "trace": log_.trace,
     }

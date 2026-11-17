@@ -67,10 +67,10 @@ The plugin returns this text from `pre_llm_call` for the run's session and nothi
 ```text
 Proof Run guided run 'deploy' (contract v1), step 1 of 1.
 Bound inputs: version=2.2.0.
-Reads recorded before this step (advisory unless listed below):
-- read_file with arguments {"path": "/srv/app/config.yaml"}
+Procedure, in order (do only the step marked NOW). Perform each step's reads in the order shown, immediately before that step; a value read before a later read may be stale.
+1. [NOW] call terminal with arguments {"command": "./deploy.sh api 2.2.0"}
+   read 1 before this step: read_file with arguments {"path": "/srv/app/config.yaml"}
 Next: call terminal with arguments {"command": "./deploy.sh api 2.2.0"}.
-This is the last step.
 Follow these steps exactly. Do not improvise with this procedure's tools (terminal). If a step is blocked or fails, stop and report it.
 ```
 
@@ -301,7 +301,7 @@ python3 -m unittest discover -s benchmarks/cloud-following-pilot -p 'test_*.py' 
 python3 benchmarks/cloud-following-pilot/replay.py
 ```
 
-At the v0.3.1 preparation tree the plugin suite had 187 tests: 146 tests at the v0.2.0 tag, 19 frozen guided-run acceptance tests, 13 persistence, validation, live-binding, hook-order, input-templating and malformed-command regression tests, and 9 durability/fail-closed regression tests. The current suite has 214 tests: 209 plugin behaviour tests and 5 catalog-folder checks. The 209 are those 187 plus 22 fail-closed regression tests (8 malformed-run-state and 14 marker load-failure tests). The benchmark adds 10 driver tests and offline replay of 39 responses across 8 trials. These commands make no model calls. [Verification details](docs/verification.md) document the host checks and individual evidence records.
+At the v0.3.1 preparation tree the plugin suite had 187 tests: 146 tests at the v0.2.0 tag, 19 frozen guided-run acceptance tests, 13 persistence, validation, live-binding, hook-order, input-templating and malformed-command regression tests, and 9 durability/fail-closed regression tests. The current suite has 217 tests: 212 plugin behaviour tests and 5 catalog-folder checks. The 212 are those 187 plus 22 fail-closed regression tests (8 malformed-run-state and 14 marker load-failure tests) and 3 guide-fidelity tests. The benchmark adds 10 driver tests and offline replay of 39 responses across 8 trials. These commands make no model calls. [Verification details](docs/verification.md) document the host checks and individual evidence records.
 
 ## How protection works
 

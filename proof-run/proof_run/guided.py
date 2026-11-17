@@ -28,7 +28,7 @@ from .core import (
 from . import bindings as live_bindings_mod
 
 MAX_BLOCKS = 5
-FACT_MAX_AGE = 300.0
+FACT_MAX_AGE = live_bindings_mod.MAX_READ_AGE
 PROCEDURE_SCHEMA = 1
 
 _INPUT_NAME = re.compile(r"[A-Za-z][A-Za-z0-9_]{0,31}")
@@ -282,7 +282,14 @@ def build_procedure(snapshot: dict, pairs) -> dict:
             for path, value in _walk(pred.get("args_match") or {}):
                 if isinstance(value, (str, int, float, bool)) and value is not None:
                     read_values.append((path, value, pred.get("tool"), path[-1] if path else ""))
-    step_templates = [live_bindings_mod.bind_step(step) for step in steps]
+    step_templates = []
+    for step in steps:
+        try:
+            step_templates.append(live_bindings_mod.bind_step(step))
+        except live_bindings_mod.BindingError as exc:
+            raise GuidedError(
+                f"the recording has an ambiguous live value: {exc}"
+            ) from None
 
     specs: list[tuple[str, str]] = []
     for name, value in pairs:
@@ -802,44 +809,64 @@ def note_result(
 
 
 def guide_text(run: dict) -> str:
+    """The full procedure, with the current step marked.
+
+    The host delivers ``pre_llm_call`` once per user turn, not once per model
+    step, so a guide that describes only the current action leaves every later
+    step to guesswork. State all of them; mark the one to do now.
+    """
     plan = run["plan"]
     total = step_count(run)
     index = min(run.get("index", 0), total - 1)
-    step = plan["steps"][index]
     inputs = ", ".join(f"{name}={_show(value)}" for name, value in plan["inputs"].items())
     lines = [
         f"Proof Run guided run '{run['name']}' (contract v{run.get('version')}), "
         f"step {index + 1} of {total}.",
         f"Bound inputs: {inputs or 'none'}.",
+        "Procedure, in order (do only the step marked NOW). Perform each step's "
+        "reads in the order shown, immediately before that step; a value read "
+        "before a later read may be stale.",
     ]
-    reads = step.get("reads") or []
-    if reads:
-        lines.append("Reads recorded before this step (advisory unless listed below):")
-        for read in reads:
-            lines.append(f"- {read['tool']} with arguments {_json(read['args'])}")
-    required = live_bindings_mod.marker_reads(step.get("args") or {})
-    if required:
-        lines.append("Required before this action: perform these reads and use their fresh values.")
-        for item in required:
-            lines.append(f"- {item['tool']} with arguments {_json(item['args'])} -> {item['field']}")
-    pinned = step.get("pinned") or []
-    if pinned:
-        lines.append("Pinned facts a fresh read must confirm:")
-        for pin in pinned:
+    for position, item in enumerate(plan["steps"]):
+        if position < index:
+            mark = "done"
+        elif position == index:
+            mark = "NOW"
+        else:
+            mark = "later"
+        resolved, missing = live_bindings_mod.resolve_dynamic(
+            item.get("args") or {}, run.get("reads") or {}
+        )
+        shown = resolved if not missing else display(item.get("args") or {})
+        lines.append(
+            f"{position + 1}. [{mark}] call {item['tool']} with arguments {_json(shown)}"
+        )
+        for read_index, read in enumerate(item.get("reads") or [], 1):
             lines.append(
-                f"- {pin['tool']}.{pin['field']} must be "
-                f"{_display_fact(pin['value'])}: call {pin['tool']} with arguments "
+                f"   read {read_index} before this step: {read['tool']} with arguments "
+                f"{_json(read['args'])}"
+            )
+        required = live_bindings_mod.marker_reads(item.get("args") or {})
+        if required:
+            names = ", ".join(f"{entry['tool']}.{entry['field']}" for entry in required)
+            lines.append(f"   fresh values required: {names}")
+        for pin in item.get("pinned") or []:
+            lines.append(
+                f"   pinned: {pin['tool']}.{pin['field']} must be "
+                f"{_display_fact(pin['value'])} via {pin['tool']} with arguments "
                 f"{_json(pin['args'])}"
             )
-    resolved, missing = live_bindings_mod.resolve_dynamic(step.get("args") or {}, run.get("reads") or {})
+    step = plan["steps"][index]
+    resolved, missing = live_bindings_mod.resolve_dynamic(
+        step.get("args") or {}, run.get("reads") or {}
+    )
     shown = resolved if not missing else display(step.get("args") or {})
+    if missing:
+        lines.append(
+            "Required before this action: perform the reads listed above and use "
+            f"their fresh values ({', '.join(sorted(set(missing)))})."
+        )
     lines.append(f"Next: call {step['tool']} with arguments {_json(shown)}.")
-    later = total - index - 1
-    if later:
-        names = ", ".join(item["tool"] for item in plan["steps"][index + 1:])
-        lines.append(f"Later steps ({later}): {names}.")
-    else:
-        lines.append("This is the last step.")
     lines.append(
         "Follow these steps exactly. Do not improvise with this procedure's tools "
         f"({', '.join(plan['tools'])}). If a step is blocked or fails, stop and report it."
@@ -850,6 +877,7 @@ def guide_text(run: dict) -> str:
             "proposing another action."
         )
     return "\n".join(lines)
+
 
 
 def notice(run: dict) -> tuple[str, bool]:

@@ -370,14 +370,14 @@ class ScriptedPreflight(unittest.TestCase):
         self.assertEqual(target.rejections()[-1]["code"], "read_before_lookup")
         self.assertEqual((self.host.run_state(session) or {})["state"], "stopped")
 
-    def test_known_plugin_limitation_coincident_numbers_in_a_demonstration(self):
-        """A recording where a quantity equals a stock level saves a constant, not a live slot.
+    def test_coincident_numbers_bind_to_the_right_field(self):
+        """A demonstration where quantity equals a stock level still binds live.
 
-        The plugin keeps one candidate per value and the later field (available)
-        cannot bind to the action's quantity argument, so the saved procedure
-        replays the teacher's number. The benchmark avoids it (see task_set);
-        if the plugin stops doing this, this test fails and the README finding
-        should be updated.
+        The plugin keeps candidates per (tool, field), so the action's quantity
+        binds to the request's quantity and the stock version to the inventory
+        read, even when both numbers are equal in the demonstration. This was a
+        known limitation; the regression is covered in
+        `proof-run/tests/test_guided_fidelity.py`.
         """
         task = T.TASKS_BY_ID["s02-exact-stock"]
         demo = T.make_instance(task, "teacher", 0)
@@ -394,8 +394,8 @@ class ScriptedPreflight(unittest.TestCase):
         target = Target(run)
         agent = Scripted(self.host, target, "run-coincident")
         agent.correct(run)
-        self.assertTrue(agent.blocked)
-        self.assertIn(f'"quantity": {qty}', agent.blocked[0])
+        self.assertEqual(agent.blocked, [], "the coincident value must not bake in")
+        self.assertEqual((self.host.run_state("run-coincident") or {})["state"], "completed")
 
 
 class Stats(unittest.TestCase):

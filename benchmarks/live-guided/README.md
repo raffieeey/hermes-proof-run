@@ -286,23 +286,22 @@ recorded as a provider error.
 
 ### Findings while building it
 
-Observed with the plugin as committed; none was changed here.
+Observed with the plugin at `fa4085b`. Two were fixed afterwards; one remains.
 
-- **Coincident numbers in a demonstration defeat live binding.** If a recorded quantity equals
-  a stock level, the plugin keeps one candidate per value (the later field) and cannot bind it
-  to the action's `quantity`, so the saved procedure replays the teacher's quantity and the
-  gate then blocks a correct follower. Demonstrations here always have slack stock with no
-  repeated numbers; exact stock is only an edge case for the runs.
-  `test_known_plugin_limitation_coincident_numbers_in_a_demonstration` pins the behaviour and
-  will fail, as a prompt to update this note, if the plugin stops doing it.
-- **The guide is delivered once per conversation turn.** `pre_llm_call` ran once per run (every
-  guided run in the driver check shows `guide_turns == 1`, including 4-step runs), so later steps of a multi-step procedure are
-  visible to the follower only as "Later steps" tool names and in block messages.
-- **The gate does not enforce read order.** Reads are not action steps, so a follower that
-  reads stock before the lookup passes the gate and is refused by the target, which stops the
-  guided run. The guide's "Required before this action" list names `inventory_read` before
-  `request_lookup`; the recorded order is only in "Reads recorded before this step".
-  The 2026-11-17 live run met this in all six guided failures (see the result above).
+- **Coincident numbers in a demonstration defeated live binding — fixed.** If a recorded quantity
+  equalled a stock level, the plugin kept one candidate per value and could not bind it to the
+  action's `quantity`, so the saved procedure replayed the teacher's quantity. Candidates are now
+  kept per `(tool, field)`; `test_coincident_numbers_bind_to_the_right_field` pins the corrected
+  behaviour, and `proof-run/tests/test_guided_fidelity.py` covers the gate.
+- **The guide was delivered once per conversation turn — fixed in the guide text.** `pre_llm_call`
+  runs once per user turn (every guided run in the driver check shows `guide_turns == 1`), so the
+  old text left later steps as tool names only. The guide now renders every step with its tool and
+  arguments and marks the current one `NOW`.
+- **The gate does not enforce read order — remains.** Reads are not action steps, so a follower
+  that reads stock before the lookup passes the gate and is refused by the target, which stops the
+  guided run. The guide now lists each step's reads in recorded order and warns that an earlier
+  read may be stale, but the contract records reads as a set, so it cannot require a re-read after
+  a later read. The 2026-11-17 live run met this in all six guided failures (see the result above).
 
 ### Next
 

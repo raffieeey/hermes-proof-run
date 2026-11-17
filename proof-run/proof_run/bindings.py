@@ -8,15 +8,22 @@ from __future__ import annotations
 
 import copy
 import re
+import time
 
 from .core import READ_ONLY_TOOLS, fact_key
 
 _DYNAMIC = "live_result"
 MIN_STRING = 4
+# A read is fresh for the same window the gate documents for remembered reads.
+MAX_READ_AGE = 300.0
 _VOLATILE = re.compile(
     r"(?:token|version|revision|(?:^|_)id$|(?:^|_)key$|nonce|cursor|etag|checksum|digest|hash|sequence|serial)",
     re.IGNORECASE,
 )
+
+
+class BindingError(ValueError):
+    """A recorded value cannot be bound to exactly one live read field."""
 
 
 def _walk(value, path=()):
@@ -31,8 +38,14 @@ def _walk(value, path=()):
 
 
 def _candidates(step: dict) -> list[dict]:
-    """Scalar read-result values recorded before this action, latest read wins."""
+    """Scalar read-result values recorded before this action, latest read wins.
+
+    Candidates stay separate per (tool, field): two fields can legitimately hold
+    the same value in one demonstration (a request quantity and an available
+    count), and collapsing them by value silently binds the wrong field.
+    """
     seen: dict[tuple, dict] = {}
+    order = 0
     for predicate in step.get("preconditions") or []:
         if predicate.get("tool") not in READ_ONLY_TOOLS or predicate.get("op") == "sha256==":
             continue
@@ -41,12 +54,14 @@ def _candidates(step: dict) -> list[dict]:
             continue
         if isinstance(value, str) and len(value) < MIN_STRING:
             continue
-        key = (type(value).__name__, repr(value))
+        key = (predicate["tool"], predicate["field"], type(value).__name__, repr(value))
+        order += 1
         seen[key] = {
             "tool": predicate["tool"],
             "args": copy.deepcopy(predicate.get("args_match") or {}),
             "field": predicate["field"],
             "recorded": copy.deepcopy(value),
+            "order": order,
         }
     return list(seen.values())
 
@@ -64,6 +79,27 @@ def _eligible(candidate: dict, key: str | None) -> bool:
     return key == candidate.get("field") or bool(_VOLATILE.search(str(candidate.get("field", ""))))
 
 
+def _unique(candidates: list[dict]) -> list[dict]:
+    seen: dict[tuple, dict] = {}
+    for candidate in candidates:
+        key = (
+            candidate["tool"],
+            candidate["field"],
+            type(candidate["recorded"]).__name__,
+            repr(candidate["recorded"]),
+        )
+        seen[key] = candidate
+    return list(seen.values())
+
+
+def _prefer_field(candidates: list[dict], key: str | None) -> list[dict]:
+    """Keep candidates whose field matches the argument key, when any do."""
+    if key is None:
+        return candidates
+    exact = [c for c in candidates if c.get("field") == key]
+    return exact or candidates
+
+
 def _bind_value(value, candidates: list[dict], used: list[dict], key: str | None = None):
     if isinstance(value, str):
         strings = [
@@ -72,14 +108,17 @@ def _bind_value(value, candidates: list[dict], used: list[dict], key: str | None
         ]
         if not strings:
             return value
-        # Longest first; one candidate per exact recorded value.
-        seen = set()
-        chosen = []
-        for candidate in sorted(strings, key=lambda c: len(c["recorded"]), reverse=True):
-            if candidate["recorded"] in seen:
-                continue
-            seen.add(candidate["recorded"])
-            chosen.append(candidate)
+        # One candidate per recorded value; a field matching the argument key wins
+        # over a coincident value from another read.
+        by_value: dict[str, dict] = {}
+        for candidate in strings:
+            recorded = candidate["recorded"]
+            previous = by_value.get(recorded)
+            if previous is None or (
+                key is not None and candidate["field"] == key and previous["field"] != key
+            ):
+                by_value[recorded] = candidate
+        chosen = sorted(by_value.values(), key=lambda c: len(c["recorded"]), reverse=True)
         chosen.sort(key=lambda c: value.find(c["recorded"]))
         parts: list = []
         position = 0
@@ -101,23 +140,38 @@ def _bind_value(value, candidates: list[dict], used: list[dict], key: str | None
         return [_bind_value(item, candidates, used, key) for item in value]
     if isinstance(value, dict):
         return {item_key: _bind_value(item, candidates, used, item_key) for item_key, item in value.items()}
-    if isinstance(value, (int, float)) and not isinstance(value, bool):
-        for candidate in candidates:
-            recorded = candidate["recorded"]
-            if (
-                type(recorded) in (int, float) and not isinstance(recorded, bool)
-                and recorded == value and _eligible(candidate, key)
-            ):
-                used.append(candidate)
-                return _slot(candidate)
-        return value
     if isinstance(value, bool):
-        for candidate in candidates:
-            if type(candidate["recorded"]) is bool and candidate["recorded"] is value and _eligible(candidate, key):
-                used.append(candidate)
-                return _slot(candidate)
-        return value
+        matches = [
+            c for c in candidates
+            if type(c["recorded"]) is bool and c["recorded"] is value and _eligible(c, key)
+        ]
+        return _bind_scalar(value, matches, used, key)
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        matches = [
+            c for c in candidates
+            if type(c["recorded"]) in (int, float)
+            and not isinstance(c["recorded"], bool)
+            and c["recorded"] == value
+            and _eligible(c, key)
+        ]
+        return _bind_scalar(value, matches, used, key)
     return value
+
+
+def _bind_scalar(value, matches: list[dict], used: list[dict], key: str | None):
+    """Bind one scalar to exactly one read field, or refuse an ambiguous map."""
+    if not matches:
+        return value
+    unique = _unique(_prefer_field(matches, key))
+    if len(unique) == 1:
+        used.append(unique[0])
+        return _slot(unique[0])
+    fields = ", ".join(sorted({f"{c['tool']}.{c['field']}" for c in unique}))
+    raise BindingError(
+        f"the value {value!r} could come from more than one read field ({fields}); "
+        "record distinct values or review the procedure"
+    )
+
 
 
 def bind_step(step: dict) -> tuple[dict, list[dict]]:
@@ -146,6 +200,9 @@ def _lookup_marker(marker: dict, reads: dict):
     read = reads.get(key)
     if not isinstance(read, dict):
         return None, False, f"no successful {tool} read with arguments {args!r}"
+    observed = read.get("observed_at")
+    if not isinstance(observed, (int, float)) or time.monotonic() - observed > MAX_READ_AGE:
+        return None, False, f"the {tool} read is older than {MAX_READ_AGE:g} seconds"
     result = read.get("result")
     if not isinstance(result, dict) or field not in result:
         return None, False, f"the {tool} read has no field {field!r}"
