@@ -4,9 +4,13 @@
 
 Proof Run records the checks and actions of a successful Hermes task, makes the procedure inspectable, and checks covered actions when you reuse it.
 
-**v0.3.1** · Hermes Agent plugin · MIT
+**v0.3.2** · Hermes Agent plugin · MIT
 
 [Watch or download the product overview (MP4)](https://github.com/raffieeey/hermes-proof-run/releases/download/v0.2.0/proof-run-overview.mp4)
+
+## What's new in v0.3.2
+
+The plugin manifest now declares the same `requires_hermes` floor as the catalog entry, which catalog rule 14 requires. Runtime behaviour is unchanged from 0.3.1.
 
 ## What's new in v0.3.1
 
@@ -29,7 +33,7 @@ test "${#PLUGIN_SHA}" -eq 40
 hermes plugins install raffieeey/hermes-proof-run/proof-run --ref "$PLUGIN_SHA" --enable
 ```
 
-v0.3.1 is tagged and released (`v0.3.1` → `6c491b2`). The [upstream Hermes catalog entry](https://github.com/NousResearch/hermes-agent/blob/main/plugin-catalog/proof-run.yaml) still pins v0.1.0 at `36f3f4111b6d8cd5cf67d53eaf54e62148fcf3ca`, which predates these commands. The proposed update is in [docs/catalog-entry.yaml](docs/catalog-entry.yaml) and is not in the catalog yet.
+v0.3.2 is tagged and released. The previous release, v0.3.1, is also tagged (`6c491b2`). The [upstream Hermes catalog entry](https://github.com/NousResearch/hermes-agent/blob/main/plugin-catalog/proof-run.yaml) still pins v0.1.0 at `36f3f4111b6d8cd5cf67d53eaf54e62148fcf3ca`, which predates these commands. The proposed update is in [docs/catalog-entry.yaml](docs/catalog-entry.yaml) and is not in the catalog yet.
 
 Publishing a release does not update an already-installed plugin or running gateway automatically. Workflow execution also needs the [supported host setup](docs/host-integration.md).
 

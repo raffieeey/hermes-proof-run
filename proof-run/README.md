@@ -1,6 +1,6 @@
 # Proof Run plugin
 
-v0.3.1.
+v0.3.2.
 
 Proof Run records a successful Hermes task at the tool boundary and saves it as a procedure with named inputs. A guided run tells a cheaper follower each step and checks every action before it executes; strict exact guards and checked-execution workflows remain available beside it.
 

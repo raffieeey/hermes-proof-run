@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.3.2] - 2026-11-17
+
+### Changed
+
+- `plugin.yaml` declares `requires_hermes: ">=0.21.0"`, the same floor the catalog entry carries. Catalog rule 14 requires both, because older Hermes versions enforce only the manifest. No runtime change.
+
 ## [0.3.1] - 2026-11-16
 
 ### Changed

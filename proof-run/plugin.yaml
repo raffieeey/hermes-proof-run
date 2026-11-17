@@ -1,5 +1,6 @@
 name: proof-run
-version: "0.3.1"
+requires_hermes: ">=0.21.0"
+version: "0.3.2"
 description: "Record a task once, save it as a procedure with inputs, and run it with a cheaper model that is guided and checked step by step. Strict exact guards and checked-execution workflows remain. Guided runs make no model-inference or network requests; the separate workflow backend can use local Ollama over loopback HTTP."
 entry: __init__.py
 author: raffieeey
