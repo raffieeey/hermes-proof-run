@@ -130,6 +130,27 @@ What the traces show. These are observations from the record, not an experiment 
   3 with "expected finish_task ...". The re-reads are where the extra calls and tokens on the
   two-request tasks went.
 
+### Result after the fidelity fixes (2026-11-17, second run)
+
+The same 12 tasks ran again after the guided-run fixes: follower `deepseek-v4.1-flash`, teacher
+`gpt-6-luna`, three runs per arm per task, **12/12 procedures saved**. Teaching is retried up to
+three times because the recorder refuses a demonstration that contains a failed call. Record:
+[`results-2026-11-17-post-fix.json`](results-2026-11-17-post-fix.json).
+
+| Arm | n | Passed | Pass rate (95% Wilson) | Reported tokens |
+|---|---:|---:|---|---:|
+| Guided | 36 | 36 | 100.0% (90.4 to 100.0) | 1,088,783 |
+| Unguided | 36 | 35 | 97.2% (85.8 to 99.5) | 778,683 |
+
+Difference **+2.8 points, 95% interval -7.1 to +14.2** (Fisher p = 1.0). The guided arm had no
+gate blocks and no target rejections; the single unguided failure never closed its request.
+Guided used 39.8% more reported tokens.
+
+Reading: the failures the first run exposed are gone — no read-order failures, no blocked retries,
+every procedure saved. The set is at ceiling for this follower (11 of 12 tasks went 3/3 in both
+arms), so it still cannot show that guidance is better. It now shows the guide is not worse and
+that it removes a failure class on the task whose prompt omits the closing step.
+
 ### Claim ceiling after the A/B run
 
 One synthetic inventory target, a twelve-task set, three matched instances per task, and one

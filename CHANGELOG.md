@@ -11,6 +11,10 @@
 - The guide now says explicitly to continue with the next step after a confirmed success, even when the text still marks the earlier step `NOW`; it is refreshed only on the next user turn.
 - The A/B record stores the complete guide the follower received, not a 2,400-character preview.
 
+### Verification
+
+- The post-fix A/B run (12 tasks, three runs per arm, `deepseek-v4.1-flash` follower, `gpt-6-luna` teacher) put guided at 36/36 and unguided at 35/36 (+2.8 points, 95% interval -7.1 to +14.2), with 12/12 procedures saved and no gate blocks. The set is at ceiling, so this does not demonstrate superiority. Record: `benchmarks/live-guided/results-2026-11-17-post-fix.json`.
+
 ## [0.3.2] - 2026-11-17
 
 ### Changed
