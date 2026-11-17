@@ -38,6 +38,38 @@ class GuideCompletenessTests(GuidedCase):
         self.assertIn("1. [NOW]", guide)
 
 
+    def test_guide_preserves_a_reread_after_another_read(self):
+        h = self.host
+        h.proof("start stock", "teach")
+        self.ran(
+            "inventory_read", {"sku": "A1"},
+            {"available": 9, "stock_version": 3, "snapshot_token": "tok-0"}, "teach",
+        )
+        self.ran(
+            "request_lookup", {"request_id": "REQ-9"},
+            {"request_id": "REQ-9", "sku": "A1", "quantity": 2}, "teach",
+        )
+        self.ran(
+            "inventory_read", {"sku": "A1"},
+            {"available": 9, "stock_version": 3, "snapshot_token": "tok-1"}, "teach",
+        )
+        self.ran(
+            "reserve_stock",
+            {
+                "request_id": "REQ-9", "sku": "A1", "quantity": 2,
+                "expected_version": 3, "snapshot_token": "tok-1",
+            },
+            {"committed": True}, "teach",
+        )
+        reply = h.proof("save request_id=REQ-9 sku=A1", "teach")
+        self.assertIn("saved", reply.lower(), reply)
+
+        h.proof("run stock request_id=REQ-10 sku=B2", "run")
+        guide = h.guide("run")
+        self.assertIn("read 3 before this step: inventory_read", guide)
+        self.assertLess(guide.index("read 2 before this step: request_lookup"), guide.index("read 3"))
+
+
 class CoincidentValueBindingTests(GuidedCase):
     """quantity and available share a value during the demonstration."""
 

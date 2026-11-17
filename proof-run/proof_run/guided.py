@@ -334,22 +334,32 @@ def build_procedure(snapshot: dict, pairs) -> dict:
 
     slots = _slot_tables(specs, kinds)
     procedure_steps = []
+    order_by_step = snapshot.get("read_order_by_step") or []
     for step_index, step in enumerate(steps):
         reads: list[dict] = []
-        groups: dict[str, dict] = {}
-        for predicate in step.get("preconditions") or []:
+        last_key = None
+        last_group = None
+        predicates = step.get("preconditions") or []
+        if step_index < len(order_by_step) and order_by_step[step_index]:
+            # Ordered read history: a value read again is listed again, which is
+            # how the guide can tell a follower to re-read before an action.
+            predicates = order_by_step[step_index]
+        for predicate in predicates:
             tool = predicate["tool"]
             args = predicate.get("args_match") or {}
             key = tool + "\0" + _canonical(args)
-            group = groups.get(key)
+            # Merge only consecutive facts from the same read. A read repeated
+            # after a different read is a re-read: keep it as its own entry so
+            # the guide preserves the order the teacher actually used.
+            group = last_group if key == last_key else None
             if group is None:
                 group = {
                     "tool": tool,
                     "args": _template(args, slots),
                     "facts": [],
                 }
-                groups[key] = group
                 reads.append(group)
+            last_key, last_group = key, group
             value = predicate.get("value")
             if predicate.get("op") != "sha256==":
                 value = _template(value, slots)
