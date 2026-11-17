@@ -32,7 +32,7 @@ jobs:
         env:
           PYTHONPATH: .
         run: python -m unittest discover -s benchmarks/live-guided -p 'test_*.py' -v
-      - name: Compile plugin and host verification script
-        run: python -m compileall -q proof-run scripts
+      - name: Compile plugin, scripts and benchmarks
+        run: python -m compileall -q proof-run scripts benchmarks
       - name: Whitespace checks
         run: git diff --check
