@@ -2,8 +2,8 @@
 
 This directory holds two things: a retained record of a first live check (2026-11-14), and a
 committed, repeatable guided-versus-unguided benchmark built to test the product claim that
-the first check could not (2026-11-17). The benchmark has not produced a live result yet; see
-[Status](#status).
+the first check could not. The benchmark's first live run (2026-11-17) is reported under
+[Result of the live A/B run](#result-of-the-live-ab-run-2026-11-17).
 
 ## Result measured on 2026-11-14
 
@@ -38,18 +38,123 @@ replaying the teacher's. Teaching and review cost are not amortized. A larger,
 varied benchmark is required before claiming productivity, token, or cost
 savings.
 
-**This ceiling is unchanged.** The A/B benchmark below exists to move it, and until it has a
-live result it does not.
+That ceiling describes the 2026-11-14 check only. The A/B run below replaces it for the
+guided-versus-unguided question; see [Claim ceiling after the A/B run](#claim-ceiling-after-the-ab-run).
 
 ## Repeatable A/B benchmark
 
-### Status
+### Result of the live A/B run (2026-11-17)
 
-Committed and verified offline. **Not yet run live.** On 2026-11-17 the configured provider
-credential was rejected by the provider (HTTP 401, "API key inactive") at the driver's
-preflight and by direct probes repeated over about 15 minutes. The driver stopped before any
-run, so there is no `results-<date>.json` and no measured table. Nothing in this README is a
-measurement of the A/B question. A key that the provider accepts is the only thing missing.
+Run once on the full set through the configured provider: the follower is `glm-5.3-flash`, the
+teacher is `glm-5.3`, three runs per arm per task. That is 36 guided and 36 unguided follower runs
+plus 12 teacher demonstrations. The record is [`results-2026-11-17.json`](results-2026-11-17.json)
+(`complete: true`, 24.6 minutes from start to finish). A one-task smoke run (`s01-basic`, one run
+per arm) came first, passed end to end and needed no fix; its output was not kept. No model call
+was retried, and none of the 84 model-driven runs ended in a provider error.
+
+Pass rates, with 95% Wilson intervals:
+
+| Arm | n | Passed | Pass rate (95% Wilson) | API calls, median (range) | Reported total tokens, median (range) | Wall time per run, median (range); arm total |
+|---|---:|---:|---|---|---|---|
+| Guided | 36 | 30 | 83.3% (68.1 to 92.1) | 6 (5 to 15) | 20,495 (16,092 to 109,879) | 11.9 s (5.9 to 116.8); 851 s |
+| Unguided | 36 | 33 | 91.7% (78.2 to 97.1) | 6.5 (4 to 8) | 19,585 (11,260 to 30,122) | 11.6 s (5.1 to 19.8); 424 s |
+
+Difference in pass rate, guided minus unguided: **-8.3 points, 95% interval -24.5 to +7.8**
+(Newcombe's hybrid score interval; Fisher's exact p = 0.48). The interval includes zero, so this
+run does not separate the arms. Computed from the record rather than by the driver, the paired
+view over the 36 matched instances agrees: 27 both passed, 3 only guided passed, 6 only unguided
+passed, none both failed (exact McNemar p = 0.51).
+
+By band (counts first; small n, so every interval is wide):
+
+| Band | Guided | Unguided | Difference, 95% interval |
+|---|---|---|---|
+| simple | 12/12 (75.8 to 100.0) | 9/12 (46.8 to 91.1) | +25.0 (-4.1 to +53.2) |
+| fresh-version | 9/12 (46.8 to 91.1) | 12/12 (75.8 to 100.0) | -25.0 (-53.2 to +4.1) |
+| order-trap | 9/12 (46.8 to 91.1) | 12/12 (75.8 to 100.0) | -25.0 (-53.2 to +4.1) |
+
+Eight of the twelve tasks went 3/3 in both arms. The other four:
+
+| Task | Guided | Unguided |
+|---|---:|---:|
+| `s04-one-unit` | 3/3 | 0/3 |
+| `f01-two-skus` | 2/3 | 3/3 |
+| `f02-same-sku` | 1/3 | 3/3 |
+| `o04-batch-reads` | 0/3 | 3/3 |
+
+Teaching cost, reported on its own and not netted out of the table above: 12 demonstrations, all
+12 passed their own checker and all 12 were saved. Teacher API calls: 98 in total, median 6
+(range 6 to 12). Reported total tokens: 368,162 in total, median 20,007 (range 17,590 to
+78,478). Wall time: 194 s in total, median 12.6 s (range 8.2 to 36.5). The follower totals
+across all 36 runs of each arm were 245 calls and 1,233,686 tokens (guided) against 222 calls
+and 739,798 tokens (unguided), so the guided arm used about two thirds more reported tokens
+overall. About 93% of that 493,888-token gap sits on the five two-request tasks (`f01` to `f04`
+and `o04`; fresh-version band median 50,355 against 26,284 tokens). `session_total_tokens` includes cached prompt tokens; this is not a dollar cost.
+
+Arms and budget. Both arms had the same six tools (`request_lookup`, `inventory_read`,
+`reserve_stock`, `verify_fulfillment`, `finish_task`, and the distractor `place_hold`), the same
+system prompt, task text and instances. The guided arm additionally had a saved procedure run
+with `/proof run`: the plugin's guide, delivered once per run (`guide_turns` was 1 in all 36
+guided runs and 0 in all 36 unguided runs), and its gate. The call budget was the per-task
+default: 10 API calls for the single-request tasks and 15 for the two-request tasks. No run was
+cut off by the budget. Three guided runs came close: one used 15 of 15 calls and passed on the
+last call (`f01-two-skus`, k=1), two used 14 of 15 (`f02-same-sku` k=0, `f03-same-sku-exact`
+k=2). The most any unguided run used was 8.
+
+What the traces show. These are observations from the record, not an experiment on cause.
+
+- **All six guided failures have one signature.** In each, the follower called `inventory_read`
+  before `request_lookup`. The target refused the first `reserve_stock` with
+  `read_before_lookup`, the plugin marked step 1 failed and stopped the guided run, and the
+  follower's corrected retry was blocked ("stopped at step 1 of 4"). The six are `f01` k=2,
+  `f02` k=1 and k=2, and `o04` k=0, 1 and 2. The unguided arm made the same mistake three
+  times, all on `o01-stock-first`, and recovered each time by retrying. So in this run the
+  stop-on-failure rule turned a recoverable target refusal into a failed run. This is the
+  behaviour the findings below describe from the offline work, now seen live.
+- **Why the guided follower read first is not established.** Guided followers read before the
+  lookup in six runs on `f01`, `f02` and `o04` and never on the other nine tasks; unguided
+  followers did so only on `o01`. The earlier finding that the guide's "Required before this
+  action" list names `inventory_read` before `request_lookup` fits this, but the results file does
+  not store the guide text the followers saw, so that link is an inference.
+- **All three unguided failures are one task and one omission.** On `s04-one-unit` the prompt
+  is `Fulfil <request> (<sku>).` and does not ask to close the task. All three unguided followers
+  reserved, read back, and replied in text without calling `finish_task`, which the checker
+  requires. All three guided followers called it; the saved procedure ends with that step. This
+  is what a saved procedure transferred against nothing on a terse prompt; it says little about
+  how an unguided model does when the prompt says to close the task (`s01` does, and both arms
+  passed it 3/3).
+- **The gate stopped stale reads before the target saw them, at a price.** Guided runs had 0
+  `stale_version` or `stale_token` rejections at the target against 12 in the unguided arm
+  (11 and 1, all recovered). Instead, 11 of the 30 passing guided runs were blocked 22 times in
+  total: 19 with "fresh read data is missing; perform the required read before this action" and
+  3 with "expected finish_task ...". The re-reads are where the extra calls and tokens on the
+  two-request tasks went.
+
+### Claim ceiling after the A/B run
+
+One synthetic inventory target, a twelve-task set, three matched instances per task, and one
+teacher and follower pair. On this set the guided arm did not pass more runs than the unguided
+arm: 30/36 against 33/36, a difference of -8.3 points whose interval (-24.5 to +7.8) includes
+zero. The data neither show a benefit nor exclude a harm of that size, and the point estimate is
+lower for guided. The arms differ by task, not overall: guided passed the one task where
+unguided never closed the request, and failed on three tasks that share one failure signature
+(a read-order mistake, then the gate's stop). The set does discriminate (four of twelve tasks
+had a failure in at least one arm); it does not yet show that guidance helps.
+
+What the number does not establish:
+
+- The intervals treat the 72 runs as independent, but they are 12 tasks times 3 instances, so the
+  uncertainty about a new task is larger than the intervals say. Three runs per task cannot say
+  whether `f02` at 1/3 and `o04` at 0/3 are rates or chance.
+- The teacher saw the order rules and the unguided follower did not (see "What is and is not
+  controlled"), so the comparison is a saved procedure against nothing, not against the same
+  rules in the prompt.
+- No productivity, token-savings, cost-savings or superiority claim. On the two-request tasks
+  the guided arm used more calls and reported tokens, and teaching cost is not amortised.
+
+`repo.dirty` in the record reads `true`. The only untracked path was the results file itself,
+which sits under the checked directory; the tree was clean when the run started (`HEAD` `3c26e63`,
+plugin version 0.3.2).
 
 ### What it does
 
@@ -197,13 +302,22 @@ Observed with the plugin as committed; none was changed here.
   reads stock before the lookup passes the gate and is refused by the target, which stops the
   guided run. The guide's "Required before this action" list names `inventory_read` before
   `request_lookup`; the recorded order is only in "Reads recorded before this step".
+  The 2026-11-17 live run met this in all six guided failures (see the result above).
 
 ### Next
 
-1. Run it with a provider key that works, then replace [Status](#status) with the measured
-   table and the interval, and update the claim ceiling from what the numbers allow.
-2. If both arms pass everything, say the task set does not discriminate and use a harder set:
-   more requests per task, a stale read that appears mid-run, an unknown commit outcome that
-   must be reconciled, and an instruction in the tool output to resist.
-3. Add the third arm: the teacher note as plain text in the follower's prompt.
-4. More than 2 runs per task if the intervals are wider than the effect worth detecting.
+1. Decide the plugin question separately; it was not touched here. Should a step the target
+   refused with no state change stop a guided run, and should the guide or gate carry the
+   recorded read order? Then re-run `f01`, `f02` and `o04` with many more runs per arm than 3,
+   because 1/3 and 0/3 cannot say how often the stop happens.
+2. Make the record able to check the cause. The driver captures the guide text each follower saw
+   (`RunLog.guide_first`) but does not write it to the results, so why the guided follower read
+   first is an inference. Also leave the output file out of `repo.dirty`.
+3. Add the third arm: the teacher note as plain text in the follower's prompt, so a saved
+   procedure is compared with the same rules written down and not with nothing.
+4. Add a variant of `s04-one-unit` whose prompt asks to close the task, to separate "did not know
+   the closing step" from "followed a procedure".
+5. If guided stops losing on the order-sensitive tasks and both arms then pass everything, the
+   set no longer discriminates; use a harder one: a weaker follower, tighter call budgets, more
+   order traps, more requests per task, a stale read that appears mid-run, an unknown commit
+   outcome that must be reconciled, and an instruction in the tool output to resist.
